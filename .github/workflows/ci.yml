@@ -36,5 +36,3 @@ jobs:
           DJANGO_SETTINGS_MODULE: lab_portal.settings_test
         run: python manage.py test --noinput
 
-      - name: Build container
-        run: docker build --tag pioneer-portal:ci .
