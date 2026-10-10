@@ -1,14 +1,19 @@
 [Unit]
 Description=Pioneer Portal deploy gateway (poll release tags, deploy with rollback)
-Documentation=file:/root/pioneer-portal/deployment/gateway/README.md
+Documentation=file:/root/pioneer-portal.deploy/gateway/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=root
-WorkingDirectory=/root/pioneer-portal/deployment/gateway
-ExecStart=/root/pioneer-portal/deployment/gateway/deploy.sh
+# The gateway deliberately lives OUTSIDE the release tree it deploys. If it ran
+# from /root/pioneer-portal/deployment/gateway, then the very release that
+# carries a gateway fix would be executed by the old gateway — so a bug in the
+# deploy code could never be fixed by deploying. Keeping it at a stable path
+# also means keep_releases() can never prune the running script.
+WorkingDirectory=/root/pioneer-portal.deploy/gateway
+ExecStart=/root/pioneer-portal.deploy/gateway/deploy.sh
 # A deploy is allowed to take a while (download + wheels + migrate + healtheck).
 # systemd kills it only if it truly wedges; the script itself fails fast.
 TimeoutStartSec=900

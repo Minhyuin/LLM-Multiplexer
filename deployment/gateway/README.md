@@ -32,7 +32,13 @@ written to.
 | `/root/pioneer-portal.deploy/state/` | `last_deployed_tag`, `previous_release`, `LAST_FAILURE`, pre-deploy DB dumps |
 | `/root/pioneer-portal.deploy/torch/` | staging + wheelhouse (cleaned after every run) |
 | `/var/log/pioneer-portal/deploy.log` | one line per event; `build.log` holds pip/django output |
-| `/root/pioneer-portal/deployment/gateway/` | this directory |
+| `/root/pioneer-portal.deploy/gateway/` | this directory — **outside the release tree on purpose** (see below) |
+
+The gateway also ships inside each release at `.../deployment/gateway/`, but that
+copy is only a reference: it is version-controlled with the app. The copy that
+actually runs is the one under `/root/pioneer-portal.deploy/gateway`, because a
+deploy gateway that lives inside the directory it replaces can never deploy a fix
+to itself — and `keep_releases()` could prune the very script that is running.
 
 ## Day-to-day
 
@@ -58,13 +64,16 @@ mistaken tag cannot silently downgrade production.
 ### Commands
 
 ```bash
-G=/root/pioneer-portal/deployment/gateway/deploy.sh
+G=/root/pioneer-portal.deploy/gateway/deploy.sh
 $G --check              # validate config, show remote tags, change nothing
 $G                      # what the timer runs
 $G --baseline           # record the highest remote tag as deployed WITHOUT deploying
 $G --tag v1.2.3         # force-deploy a specific tag (also the way to force a downgrade)
 $G --dry-run            # report what would happen
 $G --convert v0.0.1     # one-time bootstrap only (see below)
+
+# to pick up a new gateway version: copy gateway/*.{sh,env} there by hand, then
+# bash -n it. The files are in the fork under deployment/gateway/.
 ```
 
 ## Recovery
@@ -111,7 +120,9 @@ systemctl disable --now pioneer-portal-deploy.timer
 * **The DB backup is verified, not trusted.** `pg_dump` must exit 0, the gzip
   must pass `-t`, and the dump must contain at least 5 `CREATE TABLE` lines.
   The old cron job wrote 20-byte empty files for months precisely because it
-  checked nothing.
+  checked nothing. Note the backup is taken **only when the incoming release has
+  pending migrations** — a routine deploy with no schema change does not write
+  one, so `state/` can legitimately be empty after a successful deploy.
 * **Peer auth is avoided.** `pg_dump` runs as root, so it must go over TCP
   (`-h 127.0.0.1`) with `PGPASSWORD`; the unix socket uses `peer` and would fail.
 * **No GitHub API.** `git ls-remote` has no rate limit to exhaust.
@@ -125,7 +136,7 @@ It is the only operation here that moves the live tree, so it is a single
 explicit command rather than something the timer could ever reach:
 
 ```bash
-G=/root/pioneer-portal/deployment/gateway/deploy.sh
+G=/root/pioneer-portal.deploy/gateway/deploy.sh
 
 # 1. convert: stop the service, lift .env/.venv/media/staticfiles into
 #    /root/pioneer-portal.shared, restart, health-check, then move the code
