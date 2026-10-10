@@ -95,6 +95,9 @@ restore_app_link() {
 }
 
 health_check() {
+  # $1 = "quiet" to suppress progress lines (used by flip_back, which reports
+  # its own outcome and must not look like a second deploy attempt).
+  local quiet="${1:-}"
   local spec url want code attempt all_ok
   local -a hdr=()
   # NOTE: `[ -n ... ] && hdr=(...)` would be the last command of this function
@@ -113,11 +116,11 @@ health_check() {
       [ "$code" = "$want" ] || all_ok=0
     done
     if [ "$all_ok" = "1" ]; then
-      log "health check passed on attempt ${attempt}"
+      [ "$quiet" = "quiet" ] || log "health check passed on attempt ${attempt}"
       break
     fi
     if [ "$attempt" = "$HEALTH_RETRIES" ]; then
-      log "health check FAILED after ${HEALTH_RETRIES} attempts"
+      [ "$quiet" = "quiet" ] || log "health check FAILED after ${HEALTH_RETRIES} attempts"
       return 1
     fi
     sleep "$HEALTH_DELAY"
@@ -128,9 +131,9 @@ health_check() {
     if [ "$want" = "$url" ]; then want=200; fi
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$url" || echo 000)"
     if [ "$code" = "$want" ]; then
-      log "extra health check passed: $url -> $code"
+      [ "$quiet" = "quiet" ] || log "extra health check passed: $url -> $code"
     else
-      log "extra health check FAILED: $url -> $code (wanted $want)"
+      [ "$quiet" = "quiet" ] || log "extra health check FAILED: $url -> $code (wanted $want)"
       return 1
     fi
   fi
@@ -309,12 +312,22 @@ mkdir -p "$BUILD_DIR" "$WHEELHOUSE"
 
 FAIL_REASON=""
 flip_back() {
-  local prev
+  local prev rc
   prev="$(cat "$PREV_LINK_FILE" 2>/dev/null || true)"
   [ -n "$prev" ] || { log "no previous release recorded — cannot auto-rollback"; return 1; }
   ln -sfn "$prev" "${APP_LINK}.new" && mv -Tf "${APP_LINK}.new" "$APP_LINK"
   systemctl restart "$SERVICE"
-  log "ROLLED BACK to $(basename "$prev")"
+  # systemctl returns as soon as the process is started, which is a second or
+  # two before gunicorn answers. Without waiting here there is a brief window
+  # where the portal returns 502 to real users; a rollback must not leave one.
+  if health_check quiet; then
+    log "ROLLED BACK to $(basename "$prev") (serving again)"
+    return 0
+  else
+    rc=$?
+    log "ROLLED BACK to $(basename "$prev") but it is NOT healthy either — manual attention required"
+    return "$rc"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -330,11 +343,38 @@ build_release() {
     https://github.com/*/*) url="https://codeload.github.com/${url#https://github.com/}" ;;
     *) die "cannot derive a codeload URL from DEPLOY_REPO_URL='${DEPLOY_REPO_URL}'" ;;
   esac
-  url="${url}/tar.gz/refs/tags/${LATEST}"
+  # codeload generates a tarball on first request, so a tag pushed a minute ago
+  # can answer 404 or an empty body for a while. Resolve the commit too: the
+  # SHA endpoint is generated on demand the same way but is a second,
+  # independent path to the same bytes, which makes the retry meaningful rather
+  # than just a repeat of the same request.
+  local sha
+  sha="$(git ls-remote "$DEPLOY_REPO_URL" "refs/tags/${LATEST}" 2>/dev/null \
+         | awk '$2 ~ /\^\{\}$/ {print $1; exit} $2 ~ /refs\/tags\// {first=$1} END {if (first != "") print first}')"
+  [ -n "$sha" ] || log "WARNING: could not resolve ${LATEST} to a commit; falling back to the tag URL only"
 
-  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
-       --connect-timeout 20 -m "$GIT_TIMEOUT" -o "$tarball" "$url" \
-    || die "download failed: $url"
+  local attempt ok=0 u
+  for attempt in 1 2 3 4 5 6; do
+    # rebuild from the base every time: appending to $url in place would make
+    # each retry longer than the last and the second one would never 404 cleanly
+    if [ $((attempt % 2)) = 1 ] || [ -z "$sha" ]; then
+      u="${url}/tar.gz/refs/tags/${LATEST}"
+    else
+      u="${url}/tar.gz/${sha}"
+    fi
+    if curl -fsSL --retry 3 --retry-delay 4 --retry-all-errors \
+         --connect-timeout 20 -m "$GIT_TIMEOUT" -o "$tarball" "$u" \
+       && [ -s "$tarball" ]; then
+      ok=1
+      log "downloaded release tarball on attempt ${attempt}"
+      break
+    fi
+    log "download attempt ${attempt} failed: $u"
+    sleep 5
+  done
+  if [ "$ok" != "1" ]; then
+    die "download failed for ${LATEST} (commit ${sha:-unresolved}) — codeload did not serve the tarball"
+  fi
   [ -s "$tarball" ] || die "downloaded tarball is empty"
 
   # create the extraction directory here: nothing else does, and `tar`
@@ -351,6 +391,7 @@ build_release() {
   # record exactly what commit this tag points at, for the audit trail
   {
     echo "tag=${LATEST}"
+    echo "commit=${sha:-unknown}"
     echo "repo=${DEPLOY_REPO_URL}"
     echo "branch=${DEPLOY_BRANCH}"
     echo "deployed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -449,15 +490,32 @@ fi
 ln -sfn "$RELEASE_DIR" "${APP_LINK}.new" && mv -Tf "${APP_LINK}.new" "$APP_LINK"
 log "symlink flipped: ${APP_LINK} -> ${RELEASE_DIR}"
 
+# Every failure from here on has the same shape: the symlink is already pointing
+# at the new release, so roll back, prove the portal is serving again, and only
+# then leave a record. Recording BEFORE flip_back would risk systemd killing the
+# run mid-rollback and leaving the portal on the bad release with no trace of why.
+record_failure_and_die() {
+  FAIL_REASON="$1"
+  log "FAILED: ${FAIL_REASON}"
+  flip_back || true
+  { echo "deploy FAILED at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "target=${LATEST}"
+    echo "reason=${FAIL_REASON}"
+    echo "rolled_back_to=$(readlink -f "$APP_LINK")"
+  } > "${STATE_DIR}/LAST_FAILURE"
+  log "ERROR: deploy of ${LATEST} failed (${FAIL_REASON}); see ${STATE_DIR}/LAST_FAILURE"
+  exit 1
+}
+
 ( cd "$RELEASE_DIR" && set -a && . "$ENV_FILE" && set +a \
   && "${VENV}/bin/python" manage.py migrate --noinput >>"$BUILD_LOG" 2>&1 ) \
-  || { log "migrate failed"; flip_back; die "migrate failed for ${LATEST}"; }
+  || record_failure_and_die "migrate failed for ${LATEST} (see ${BUILD_LOG})"
 
 ( cd "$RELEASE_DIR" && set -a && . "$ENV_FILE" && set +a \
   && "${VENV}/bin/python" manage.py collectstatic --noinput --clear >>"$BUILD_LOG" 2>&1 ) \
-  || { log "collectstatic failed"; flip_back; die "collectstatic failed for ${LATEST}"; }
+  || record_failure_and_die "collectstatic failed for ${LATEST} (see ${BUILD_LOG})"
 
-systemctl restart "$SERVICE" || { log "systemctl restart failed"; flip_back; die "restart failed"; }
+systemctl restart "$SERVICE" || record_failure_and_die "systemctl restart failed"
 log "service restarted"
 
 if health_check; then
@@ -465,15 +523,7 @@ if health_check; then
   [ -n "$PREV_TARGET" ] && printf '%s\n' "$PREV_TARGET" > "$PREV_LINK_FILE"
   log "=== deploy OK: now running ${LATEST} ==="
 else
-  FAIL_REASON="health check failed"
-  flip_back || true
-  # surface it loudly: this is what an operator needs to see
-  { echo "deploy FAILED at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    echo "target=${LATEST}"
-    echo "reason=${FAIL_REASON}"
-    echo "rolled_back_to=$(readlink -f "$APP_LINK")"
-  } > "${STATE_DIR}/LAST_FAILURE"
-  die "deploy of ${LATEST} failed (${FAIL_REASON}) and was rolled back"
+  record_failure_and_die "health check failed after ${HEALTH_RETRIES} attempts"
 fi
 
 # --- housekeeping ----------------------------------------------------------
