@@ -1,0 +1,28 @@
+[Unit]
+Description=Pioneer Portal deploy gateway (poll release tags, deploy with rollback)
+Documentation=file:/root/pioneer-portal/deployment/gateway/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/pioneer-portal/deployment/gateway
+ExecStart=/root/pioneer-portal/deployment/gateway/deploy.sh
+# A deploy is allowed to take a while (download + wheels + migrate + healtheck).
+# systemd kills it only if it truly wedges; the script itself fails fast.
+TimeoutStartSec=900
+# No explicit locking: Type=oneshot units never overlap in systemd, so a slow
+# deploy simply makes the next timer tick a no-op.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+# Deliberately NOT hardened with ProtectSystem / ReadWritePaths: the script has
+# to repoint /root/pioneer-portal, write /root/pioneer-portal.releases and call
+# systemctl restart. Confining it here would only create breakage that looks
+# like a deploy failure. It is a root-owned 0700 script, not a network service.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
