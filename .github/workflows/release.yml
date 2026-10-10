@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  verify:
+    name: Verify portal
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Create semantic release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect existing semantic tags
+        id: tags
+        shell: bash
+        run: |
+          if git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo 'has_semver_tags=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_semver_tags=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      # The first release is deliberately fixed at v1.0.0. Subsequent releases
+      # use the same conventional-commit rules as the PinyCore workflow.
+      - name: Create initial v1.0.0 release
+        if: steps.tags.outputs.has_semver_tags == 'false'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v1.0.0
+          name: v1.0.0
+          commit: ${{ github.sha }}
+          generateReleaseNotes: true
+          makeLatest: true
+
+      - name: Bump semantic version and push tag
+        if: steps.tags.outputs.has_semver_tags == 'true'
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: false
+          default_prerelease_bump: false
+          release_branches: main,master
+          custom_release_rules: 'ci:prerelease,refactor:prerelease,chore:prerelease,docs:prepatch,style:prerelease,build:prerelease,test:prerelease'
+          append_to_pre_release_tag: nightly
+          fetch_all_tags: true
+
+      - name: Create GitHub release for bumped tag
+        if: steps.tags.outputs.has_semver_tags == 'true' && steps.tag_version.outputs.new_tag != ''
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.tag_version.outputs.new_tag }}
+          name: ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }}
+          makeLatest: true
+          generateReleaseNotes: true
