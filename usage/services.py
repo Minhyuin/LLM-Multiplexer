@@ -1,5 +1,9 @@
 import csv
 import json
+import logging
+import os
+import re
+import sqlite3
 import threading
 import time
 from collections import defaultdict
@@ -20,6 +24,8 @@ from dashboard.models import ModelPricing
 from usage.models import UsageImportJob, UsageLog
 
 
+logger = logging.getLogger(__name__)
+
 SYNC_LOCK = threading.Lock()
 LAST_SYNC_AT = 0.0
 SYNC_INTERVAL_SECONDS = 60
@@ -33,6 +39,13 @@ DEFAULT_MODEL_PRICING = {
     "gemini-3.1-pro-preview": (Decimal("2.00"), Decimal("12.00"), Decimal("0.20")),
     "gemini-3.1-flash-lite-preview": (Decimal("0.25"), Decimal("1.50"), Decimal("0.03")),
 }
+
+CLIPROXY_SYNC_SOURCE_NAMES = [
+    "cpa-usage-keeper-db",
+    "cpa-usage-keeper",
+    "cliproxy-management-api",
+    "cliproxy-usage-queue",
+]
 
 
 def get_model_pricing(model_name):
@@ -61,6 +74,9 @@ def parse_request_time(value):
     if isinstance(value, datetime):
         return value
     parsed = parse_datetime(str(value))
+    if not parsed:
+        trimmed = re.sub(r"\.(\d{6})\d+([+-]\d{2}:\d{2}|Z)$", r".\1\2", str(value))
+        parsed = parse_datetime(trimmed)
     if parsed:
         return parsed if timezone.is_aware(parsed) else timezone.make_aware(parsed)
     return timezone.now()
@@ -141,6 +157,19 @@ def import_usage_records(records, source_type, source_name):
                 errors.append(f"第 {index} 行缺少 request_id")
                 continue
             if rid in existing_ids:
+                existing = UsageLog.objects.filter(request_id=rid).first()
+                if existing and (not existing.user_id or not existing.api_key_id):
+                    data = normalize_usage_record(raw)
+                    user, api_key = resolve_related_objects(data)
+                    update_fields = []
+                    if user and not existing.user_id:
+                        existing.user = user
+                        update_fields.append("user")
+                    if api_key and not existing.api_key_id:
+                        existing.api_key = api_key
+                        update_fields.append("api_key")
+                    if update_fields:
+                        existing.save(update_fields=update_fields)
                 skipped += 1
                 continue
             # Only do expensive normalization for new records
@@ -151,7 +180,6 @@ def import_usage_records(records, source_type, source_name):
             imported += 1
         except Exception as exc:
             failed += 1
-            errors.append(f"第 {index} 行导入失败: {exc}")
             errors.append(f"第 {index} 行导入失败: {exc}")
 
     job.imported_count = imported
@@ -213,8 +241,321 @@ def normalize_cliproxy_usage_payload(payload):
     return records
 
 
+def keeper_sync_configured():
+    return all(
+        os.getenv(name)
+        for name in ["CPA_USAGE_KEEPER_BASE_URL", "CPA_USAGE_KEEPER_USERNAME", "CPA_USAGE_KEEPER_PASSWORD"]
+    )
+
+
+def _extract_keeper_events_page(payload, current_page):
+    if not isinstance(payload, dict):
+        return [], current_page
+
+    data = payload.get("data")
+    candidates = [payload.get("events"), payload.get("items"), payload.get("records")]
+    if isinstance(data, list):
+        candidates.append(data)
+    elif isinstance(data, dict):
+        candidates.extend([data.get("events"), data.get("items"), data.get("records")])
+
+    page_events = []
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            page_events = candidate
+            break
+
+    data_obj = data if isinstance(data, dict) else {}
+    pagination = payload.get("pagination") or data_obj.get("pagination") or {}
+    total_pages = (
+        payload.get("total_pages")
+        or payload.get("pages")
+        or data_obj.get("total_pages")
+        or data_obj.get("pages")
+        or pagination.get("total_pages")
+        or pagination.get("pages")
+        or current_page
+    )
+    return page_events, int(total_pages)
+
+
+def fetch_keeper_usage_events(range_name=None, page_size=None, max_pages=20):
+    base_url = os.getenv("CPA_USAGE_KEEPER_BASE_URL", "").rstrip("/")
+    username = os.getenv("CPA_USAGE_KEEPER_USERNAME", "")
+    password = os.getenv("CPA_USAGE_KEEPER_PASSWORD", "")
+    range_name = range_name or os.getenv("CPA_USAGE_KEEPER_RANGE", "7d")
+    page_size = int(page_size or os.getenv("CPA_USAGE_KEEPER_PAGE_SIZE", "500"))
+
+    session = requests.Session()
+    login = session.post(
+        f"{base_url}/api/v1/auth/login",
+        json={"username": username, "password": password},
+        timeout=15,
+    )
+    login.raise_for_status()
+
+    events = []
+    for page in range(1, max_pages + 1):
+        params = {"range": range_name, "page": page, "page_size": page_size}
+        response = session.get(f"{base_url}/api/v1/usage/events", params=params, timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+        page_events, total_pages = _extract_keeper_events_page(payload, page)
+        if not page_events:
+            break
+        events.extend(page_events)
+        if page >= total_pages:
+            break
+    return events
+
+
+KEEPER_DB_DEFAULT_PATH = "/root/cpa-usage-keeper/data/app.db"
+
+# Cap a single periodic sync so one run cannot pull the whole history; the
+# backfill_keeper_usage command passes limit=None when that is what you want.
+KEEPER_DB_SYNC_BATCH = 5000
+
+KEEPER_DB_COLUMNS = (
+    "id, api_group_key, provider, endpoint, request_id, model, model_alias, timestamp, "
+    "source, auth_index, failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, "
+    "cached_tokens, cache_read_tokens, cache_creation_tokens, total_tokens, reasoning_effort, "
+    "service_tier"
+)
+
+
+def keeper_db_path():
+    return os.getenv("CPA_USAGE_KEEPER_DB", KEEPER_DB_DEFAULT_PATH)
+
+
+def keeper_db_available():
+    path = keeper_db_path()
+    return bool(path) and os.path.exists(path)
+
+
+def fetch_keeper_events_sqlite(since_id=0, limit=None):
+    """Read usage events straight from the local cpa-usage-keeper SQLite database.
+
+    The keeper HTTP API masks the client key as ``sk-*********<last6>``. Keys that
+    share a 6-character suffix (e.g. ``...YuMingYuan`` and ``...ShiNingYuan``) are
+    indistinguishable there, so events cannot be attributed to a user. The database
+    keeps the full key in ``api_group_key``, which makes the match exact.
+    """
+    conn = sqlite3.connect(f"file:{keeper_db_path()}?mode=ro", uri=True, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        sql = f"SELECT {KEEPER_DB_COLUMNS} FROM usage_events WHERE id > ? ORDER BY id ASC"
+        params = [int(since_id or 0)]
+        if limit:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return [_keeper_row_to_event(row) for row in conn.execute(sql, params)]
+    finally:
+        conn.close()
+
+
+def _keeper_row_to_event(row):
+    """Shape a SQLite row like a keeper HTTP API event so one importer handles both."""
+    return {
+        "id": str(row["id"]),
+        "api_group_key": row["api_group_key"] or "",
+        "api_key": row["api_group_key"] or "",
+        "timestamp": row["timestamp"],
+        "model": row["model"],
+        "model_alias": row["model_alias"],
+        "request_id": row["request_id"],
+        "endpoint": row["endpoint"],
+        "source": row["source"],
+        "source_type": row["provider"],
+        "provider": row["provider"],
+        "auth_index": row["auth_index"],
+        "reasoning_effort": row["reasoning_effort"],
+        "service_tier": row["service_tier"],
+        "failed": bool(row["failed"]),
+        "latency_ms": row["latency_ms"] or 0,
+        "tokens": {
+            "input_tokens": row["input_tokens"] or 0,
+            "output_tokens": row["output_tokens"] or 0,
+            "reasoning_tokens": row["reasoning_tokens"] or 0,
+            "cached_tokens": row["cached_tokens"] or 0,
+            "cache_read_tokens": row["cache_read_tokens"] or 0,
+            "cache_creation_tokens": row["cache_creation_tokens"] or 0,
+            "total_tokens": row["total_tokens"] or 0,
+        },
+    }
+
+
+def latest_keeper_event_id():
+    """Highest keeper event id already stored, so syncs stay incremental."""
+    highest = 0
+    for rid in UsageLog.objects.filter(request_id__startswith="keeper-").values_list("request_id", flat=True):
+        try:
+            highest = max(highest, int(rid.split("-", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    return highest
+
+
+def _resolve_keeper_api_key(event):
+    """Match a keeper event to a portal APIKey.
+
+    Prefers the full key from the SQLite source; falls back to the masked suffix
+    that the HTTP API exposes. Returns None when no single key matches -- the
+    caller still imports the event so totals stay correct.
+    """
+    full_key = (event.get("api_group_key") or "").strip()
+    if full_key and not full_key.startswith("sk-*"):
+        api_key = APIKey.objects.filter(
+            Q(token_plaintext=full_key) | Q(token_hash=APIKey.hash_token(full_key))
+        ).select_related("user").first()
+        if api_key:
+            return api_key
+
+    key_hash = (event.get("api_key_hash") or "").strip()
+    key_prefix = (event.get("api_key_prefix") or "").strip()
+    masked_key = (event.get("api_key") or "").strip()
+
+    query = Q()
+    if key_hash:
+        query |= Q(token_hash=key_hash)
+    if key_prefix:
+        query |= Q(token_prefix__iexact=key_prefix)
+
+    suffix = ""
+    if masked_key:
+        suffix = masked_key.rsplit("*", 1)[-1].strip()
+        if len(suffix) >= 4:
+            query |= Q(token_plaintext__endswith=suffix) | Q(token_masked__endswith=suffix)
+
+    if not query:
+        return None
+
+    matches = list(APIKey.objects.filter(query).select_related("user")[:2])
+    if len(matches) == 1:
+        return matches[0]
+    if key_hash or key_prefix:
+        return matches[0] if matches else None
+    return None
+
+
+def import_keeper_usage_events(events, source_name="cpa-usage-keeper"):
+    job = UsageImportJob.objects.create(source_type=UsageImportJob.SOURCE_API, source_name=source_name)
+    imported = skipped = failed = unmatched = 0
+    errors = []
+
+    raw_ids = [f"keeper-{event.get('id')}" for event in events if event.get("id")]
+    existing_ids = set()
+    for i in range(0, len(raw_ids), 500):
+        chunk = raw_ids[i:i + 500]
+        existing_ids.update(UsageLog.objects.filter(request_id__in=chunk).values_list("request_id", flat=True))
+
+    for index, event in enumerate(events, start=1):
+        try:
+            event_id = str(event.get("id") or "").strip()
+            if not event_id:
+                failed += 1
+                errors.append(f"第 {index} 条 keeper 事件缺少 id")
+                continue
+            rid = f"keeper-{event_id}"
+            if rid in existing_ids:
+                skipped += 1
+                continue
+
+            api_key = _resolve_keeper_api_key(event)
+            if not api_key:
+                # Keep the event: an unattributed row still makes portal totals
+                # match CPA. Dropping it silently is what made them diverge.
+                unmatched += 1
+
+            tokens = event.get("tokens") or {}
+            prompt_tokens = int(tokens.get("input_tokens") or event.get("input_tokens") or 0)
+            completion_tokens = int(tokens.get("output_tokens") or event.get("output_tokens") or 0)
+            total_tokens = int(tokens.get("total_tokens") or event.get("total_tokens") or prompt_tokens + completion_tokens)
+            cached_tokens = int(tokens.get("cached_tokens") or event.get("cached_tokens") or 0)
+            reasoning_tokens = int(tokens.get("reasoning_tokens") or event.get("reasoning_tokens") or 0)
+            model_name = str(event.get("model_alias") or event.get("model") or "unknown").strip()
+            failed_event = bool(event.get("failed"))
+            raw_payload = {
+                "source": "cpa-usage-keeper",
+                "keeper_event_id": event_id,
+                "upstream_request_id": event.get("request_id"),
+                "endpoint": event.get("endpoint"),
+                "source_type": event.get("source_type"),
+                "auth_index": event.get("auth_index"),
+                "reasoning_effort": event.get("reasoning_effort"),
+                "service_tier": event.get("service_tier"),
+                "tokens": {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "cached_tokens": cached_tokens,
+                    "cache_read_tokens": int(tokens.get("cache_read_tokens") or event.get("cache_read_tokens") or 0),
+                    "cache_creation_tokens": int(tokens.get("cache_creation_tokens") or event.get("cache_creation_tokens") or 0),
+                    "total_tokens": total_tokens,
+                },
+            }
+            fallback_identifier = (event.get("api_group_key") or event.get("api_key") or "").strip()
+            UsageLog.objects.create(
+                request_id=rid,
+                user=api_key.user if api_key else None,
+                api_key=api_key,
+                user_identifier=api_key.user.username if api_key else "",
+                api_key_identifier=api_key.token_prefix if api_key else fallback_identifier[:150],
+                model_name=model_name,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                estimated_cost=calculate_estimated_cost(model_name, prompt_tokens, completion_tokens, raw_payload),
+                status_code=500 if failed_event else 200,
+                is_error=failed_event,
+                error_message="keeper failed event" if failed_event else "",
+                request_time=parse_request_time(event.get("timestamp")),
+                raw_payload=raw_payload,
+                latency_ms=int(event.get("latency_ms") or 0),
+                cached_tokens=cached_tokens,
+                reasoning_tokens=reasoning_tokens,
+                provider=str(event.get("provider") or event.get("source_type") or "").strip(),
+            )
+            existing_ids.add(rid)
+            imported += 1
+        except Exception as exc:
+            failed += 1
+            errors.append(f"第 {index} 条 keeper 事件导入失败: {exc}")
+
+    job.imported_count = imported
+    job.skipped_count = skipped
+    job.failed_count = failed
+    job.summary = f"unmatched={unmatched}" if unmatched else ""
+    if errors:
+        job.summary = "\n".join([job.summary, *errors[:20]]).strip()
+    job.save(update_fields=["imported_count", "skipped_count", "failed_count", "summary"])
+    return job
+
+
+def sync_keeper_usage_records(limit=KEEPER_DB_SYNC_BATCH):
+    """Sync from the local keeper database when present, else the HTTP API."""
+    if keeper_db_available():
+        events = fetch_keeper_events_sqlite(since_id=latest_keeper_event_id(), limit=limit)
+        return import_keeper_usage_events(events, source_name="cpa-usage-keeper-db")
+    events = fetch_keeper_usage_events()
+    return import_keeper_usage_events(events)
+
+
 def sync_cliproxy_usage_records():
-    payload = fetch_cliproxy_usage_records()
+    try:
+        payload = fetch_cliproxy_usage_records()
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        if getattr(response, "status_code", None) == 404:
+            if keeper_db_available() or keeper_sync_configured():
+                try:
+                    return sync_keeper_usage_records()
+                except (requests.RequestException, sqlite3.Error) as keeper_exc:
+                    # Never fail silently here: a dead keeper used to leave the
+                    # portal quietly stuck on an always-empty queue for days.
+                    logger.error("keeper sync failed, falling back to usage-queue: %s", keeper_exc)
+            return sync_cliproxy_usage_queue_records(count=10000)
+        raise
+
     records = normalize_cliproxy_usage_payload(payload)
 
     # Only import records whose api_key_identifier matches a key bound in the portal.
@@ -247,16 +588,63 @@ def sync_cliproxy_usage_records():
     return import_usage_records(filtered, UsageImportJob.SOURCE_API, "cliproxy-management-api")
 
 
+def sync_cliproxy_usage_queue_records(count=10000):
+    events = fetch_usage_queue_events(count=count)
+    if isinstance(events, dict):
+        events = events.get("items") or events.get("data") or events.get("messages") or []
+    if not isinstance(events, list):
+        events = []
+
+    job = UsageImportJob.objects.create(source_type=UsageImportJob.SOURCE_API, source_name="cliproxy-usage-queue")
+    imported = skipped = failed = 0
+    errors = []
+
+    raw_ids = [str(event.get("request_id") or "").strip() for event in events if event.get("request_id")]
+    existing_ids = set()
+    for i in range(0, len(raw_ids), 500):
+        chunk = raw_ids[i:i + 500]
+        existing_ids.update(UsageLog.objects.filter(request_id__in=chunk).values_list("request_id", flat=True))
+
+    for index, event in enumerate(events, start=1):
+        try:
+            rid = str(event.get("request_id") or "").strip()
+            if not rid:
+                failed += 1
+                errors.append(f"第 {index} 条队列事件缺少 request_id")
+                continue
+            if rid in existing_ids:
+                skipped += 1
+                continue
+
+            data = normalize_queue_event(event)
+            user, api_key = resolve_related_objects(data)
+            UsageLog.objects.create(**data, user=user, api_key=api_key)
+            existing_ids.add(rid)
+            imported += 1
+        except Exception as exc:
+            failed += 1
+            errors.append(f"第 {index} 条队列事件导入失败: {exc}")
+
+    job.imported_count = imported
+    job.skipped_count = skipped
+    job.failed_count = failed
+    job.summary = "\n".join(errors[:20])
+    job.save(update_fields=["imported_count", "skipped_count", "failed_count", "summary"])
+    return job
+
+
+def latest_cliproxy_sync_job():
+    return UsageImportJob.objects.filter(source_name__in=CLIPROXY_SYNC_SOURCE_NAMES).first()
+
+
 def auto_sync_cliproxy_usage_records(force=False):
     global LAST_SYNC_AT
     now = time.time()
     if not force and now - LAST_SYNC_AT < SYNC_INTERVAL_SECONDS:
-        latest_job = UsageImportJob.objects.filter(source_name="cliproxy-management-api").first()
-        return latest_job, False
+        return latest_cliproxy_sync_job(), False
 
     if not SYNC_LOCK.acquire(blocking=False):
-        latest_job = UsageImportJob.objects.filter(source_name="cliproxy-management-api").first()
-        return latest_job, False
+        return latest_cliproxy_sync_job(), False
 
     try:
         job = sync_cliproxy_usage_records()

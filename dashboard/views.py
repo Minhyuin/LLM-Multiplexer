@@ -253,7 +253,7 @@ def _cpap_api_call(auth_index, method, url, extra_headers=None):
         urljoin(settings.CLIPROXY_MANAGEMENT_BASE_URL, "/v0/management/api-call"),
         headers=headers,
         json=payload,
-        timeout=20,
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()
@@ -336,12 +336,80 @@ def _parse_gemini_quota(data):
     return result if result["windows"] else None
 
 
+# --- Quota cache and auto-refresh for codex ---
+import threading
+import time as _time
+
+_quota_cache = {}  # {auth_index: {"data": parsed_quota, "timestamp": epoch_float}}
+_quota_refresh_lock = threading.Lock()
+_last_auto_refresh = 0.0
+_AUTO_REFRESH_INTERVAL = 60 * 60  # 60 minutes
+
+
+def _auto_refresh_codex_quotas():
+    """Background auto-refresh of all codex credential quotas every 30 minutes.
+    Only runs between 10:00-22:00 local time, only for enabled credentials."""
+    global _last_auto_refresh
+    now = _time.time()
+    if now - _last_auto_refresh < _AUTO_REFRESH_INTERVAL:
+        return
+
+    # Only run between 10:00 and 22:00 local time
+    from django.utils import timezone as tz
+    local_hour = tz.localtime().hour
+    if local_hour < 10 or local_hour >= 22:
+        return
+
+    if not _quota_refresh_lock.acquire(blocking=False):
+        return
+
+    try:
+        _last_auto_refresh = now
+        t = threading.Thread(target=_do_refresh_all_codex, daemon=True)
+        t.start()
+    finally:
+        _quota_refresh_lock.release()
+
+
+def _do_refresh_all_codex():
+    """Fetch quota for all enabled codex credentials and cache results."""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        files = _fetch_auth_files()
+    except Exception:
+        return
+
+    # Only refresh enabled (not disabled) codex credentials
+    codex_files = [f for f in files if f.get("provider") == "codex" and not f.get("disabled")]
+    config = QUOTA_CONFIGS.get("codex")
+    if not config:
+        return
+
+    for f in codex_files:
+        auth_index = f.get("auth_index", "")
+        if not auth_index:
+            continue
+        try:
+            data = _cpap_api_call(auth_index, config["method"], config["url"], config.get("headers"))
+            parsed = _parse_codex_quota(data)
+            if parsed:
+                _quota_cache[auth_index] = {"data": parsed, "timestamp": _time.time()}
+        except Exception as exc:
+            logger.debug(f"Auto-refresh quota failed for {auth_index}: {exc}")
+        # 5 second delay between requests to avoid rate limiting and memory pressure
+        _time.sleep(5)
+
+
 @login_required
 def admin_credentials(request):
     """Display all CPAP auth credentials grouped by provider."""
     from collections import defaultdict
     from datetime import timedelta
     from django.utils import timezone as tz
+
+    # Trigger background auto-refresh of codex quotas
+    _auto_refresh_codex_quotas()
 
     try:
         files = _fetch_auth_files()
@@ -358,7 +426,7 @@ def admin_credentials(request):
         provider = f.get("provider", "unknown")
         credential = {
             "auth_index": f.get("auth_index", ""),
-            "email": f.get("email", f.get("account", "")),
+            "email": f.get("email", f.get("account", "")) or f.get("name", f.get("id", "")).replace(".json", ""),
             "provider": provider,
             "disabled": f.get("disabled", False),
             "failed": f.get("failed", 0),
@@ -393,16 +461,35 @@ def admin_credentials(request):
         credential["five_h_total"] = five_h_success + five_h_failed
         credential["weekly_total"] = weekly_success + weekly_failed
 
+        # Build sparkline data (last 20 slots for visual display)
+        sparkline_slots = recent[-20:] if len(recent) >= 20 else recent
+        sparkline = []
+        for slot in sparkline_slots:
+            s = slot.get("success", 0)
+            f_count = slot.get("failed", 0)
+            if s == 0 and f_count == 0:
+                sparkline.append("empty")
+            elif f_count > 0 and s == 0:
+                sparkline.append("fail")
+            elif f_count > 0:
+                sparkline.append("warn")
+            else:
+                sparkline.append("ok")
+        credential["sparkline"] = sparkline
+        credential["updated_at"] = f.get("updated_at", "")
+
         # Email masking for non-admin users
         email = credential["email"]
         if email and not request.user.is_staff:
             parts = email.split("@")
             if len(parts) == 2:
+                # Real email - mask the local part
                 name = parts[0]
                 masked_name = name[:3] + "***" if len(name) > 3 else name[0] + "***"
                 credential["email_masked"] = f"{masked_name}@{parts[1]}"
             else:
-                credential["email_masked"] = email[:4] + "***"
+                # Not an email (e.g. file name like kiro-google-pro-1) - show as-is
+                credential["email_masked"] = email
         else:
             credential["email_masked"] = email
 
@@ -445,7 +532,30 @@ def admin_credentials_refresh(request, auth_index):
         return JsonResponse({"ok": False, "error": "POST required"}, status=405)
 
     import json as json_mod
+    import time as time_mod
     provider = request.POST.get("provider", request.GET.get("provider", ""))
+
+    # Cooldown check for codex: 15 minutes between refreshes per auth_index
+    COOLDOWN_SECONDS = 15 * 60
+    cache_only = request.POST.get("cache_only", "") == "1"
+    if provider == "codex":
+        cache_entry = _quota_cache.get(auth_index)
+        if cache_entry:
+            elapsed = time_mod.time() - cache_entry["timestamp"]
+            minutes_ago = int(elapsed // 60)
+            # Return cache if: within cooldown OR cache_only mode (page load)
+            if elapsed < COOLDOWN_SECONDS or cache_only:
+                return JsonResponse({
+                    "ok": True,
+                    "quota": cache_entry["data"],
+                    "provider": provider,
+                    "cached": True,
+                    "minutes_ago": minutes_ago,
+                    "message": f"该配额刷新时间为 {minutes_ago} 分钟前" if not cache_only else "",
+                })
+        elif cache_only:
+            # No cache and cache_only mode - return empty
+            return JsonResponse({"ok": True, "quota": None, "provider": provider, "cached": True, "minutes_ago": None})
 
     try:
         if provider == "kiro":
@@ -473,7 +583,10 @@ def admin_credentials_refresh(request, auth_index):
                 parsed = {"provider": provider, "raw": data}
 
             if parsed:
-                return JsonResponse({"ok": True, "quota": parsed, "provider": provider})
+                # Cache the result for codex
+                if provider == "codex":
+                    _quota_cache[auth_index] = {"data": parsed, "timestamp": time_mod.time()}
+                return JsonResponse({"ok": True, "quota": parsed, "provider": provider, "minutes_ago": 0})
             else:
                 return JsonResponse({"ok": False, "error": "无法解析配额数据", "raw_status": data.get("status_code")})
         else:
@@ -481,3 +594,56 @@ def admin_credentials_refresh(request, auth_index):
 
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@login_required
+def admin_credentials_quota_cache(request):
+    """Read-only endpoint returning cached quota data. Never triggers real API calls."""
+    from django.http import JsonResponse
+
+    quotas = {}
+    for auth_index, cache_entry in _quota_cache.items():
+        elapsed = _time.time() - cache_entry["timestamp"]
+        quotas[auth_index] = {
+            "data": cache_entry["data"],
+            "minutes_ago": int(elapsed // 60),
+        }
+
+    return JsonResponse({"ok": True, "quotas": quotas})
+
+
+@login_required
+def admin_credentials_health(request):
+    """AJAX endpoint returning live health status for all credentials."""
+    from django.http import JsonResponse
+
+    try:
+        files = _fetch_auth_files()
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+    credentials = []
+    for f in files:
+        recent = f.get("recent_requests") or []
+        sparkline_slots = recent[-20:] if len(recent) >= 20 else recent
+        sparkline = []
+        for slot in sparkline_slots:
+            s = slot.get("success", 0)
+            f_count = slot.get("failed", 0)
+            if s == 0 and f_count == 0:
+                sparkline.append("empty")
+            elif f_count > 0 and s == 0:
+                sparkline.append("fail")
+            elif f_count > 0:
+                sparkline.append("warn")
+            else:
+                sparkline.append("ok")
+
+        credentials.append({
+            "auth_index": f.get("auth_index", ""),
+            "success": f.get("success", 0),
+            "failed": f.get("failed", 0),
+            "sparkline": sparkline,
+        })
+
+    return JsonResponse({"ok": True, "credentials": credentials})

@@ -117,19 +117,21 @@ def sync_trigger(request):
 @login_required
 def auto_sync_status(request):
     job, triggered = auto_sync_cliproxy_usage_records()
+    # Also consume usage-queue for richer data (provider, latency, cached_tokens)
+    queue_result, queue_triggered = auto_sync_usage_queue()
+    queue_imported = queue_result.get("imported", 0) if isinstance(queue_result, dict) else 0
     return JsonResponse(
         {
             "ok": True,
-            "triggered": triggered,
+            "triggered": triggered or queue_triggered,
             "job": {
-                "imported_count": getattr(job, "imported_count", 0),
+                "imported_count": getattr(job, "imported_count", 0) + queue_imported,
                 "skipped_count": getattr(job, "skipped_count", 0),
                 "failed_count": getattr(job, "failed_count", 0),
                 "created_at": job.created_at.isoformat() if job else None,
             },
         }
     )
-
 
 @login_required
 def usage_public_summary(request):
@@ -169,7 +171,11 @@ def request_events(request):
         range_name = "today"
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    qs = UsageLog.objects.all().order_by("-request_time")
+    qs = UsageLog.objects.exclude(request_id__startswith="cliproxy-").select_related("user", "user__profile", "api_key").order_by("-request_time")
+    # Exclude hidden/internal API keys from display
+    hidden_keys = getattr(settings, 'HIDDEN_API_KEYS', [])
+    if hidden_keys:
+        qs = qs.exclude(api_key_identifier__in=hidden_keys)
     if start:
         qs = qs.filter(request_time__gte=start)
     if provider_filter:

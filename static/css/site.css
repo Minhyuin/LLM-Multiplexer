@@ -60,6 +60,18 @@ body.site-body.usage-page {
         url('/static/brand/usage-background.jpg') center/cover fixed no-repeat;
 }
 
+body.site-body.credentials-page {
+    background:
+        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
+        url('/static/brand/credentials-background.jpg') center/cover fixed no-repeat;
+}
+
+body.site-body.events-page {
+    background:
+        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
+        url('/static/brand/events-background.jpg') center/cover fixed no-repeat;
+}
+
 .site-shell {
     min-height: 100vh;
 }

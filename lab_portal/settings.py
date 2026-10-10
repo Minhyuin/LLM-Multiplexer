@@ -149,3 +149,8 @@ LOGGING = {
         },
     },
 }
+
+# --- Hidden API keys (excluded from request events display) ---
+HIDDEN_API_KEYS = [
+    k.strip() for k in os.getenv("HIDDEN_API_KEYS", "sk-yGzGlNEvSI7ltBiM1of0bfvwiBeKZceoRukgs6K4LeQJe").split(",") if k.strip()
+]

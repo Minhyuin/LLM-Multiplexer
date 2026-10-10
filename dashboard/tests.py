@@ -23,9 +23,10 @@ class DashboardDefaultRangeTests(TestCase):
         local_now = datetime(2026, 4, 26, 0, 23, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         with patch("dashboard.views.timezone.localtime", return_value=local_now):
-            start = _get_range_start("today")
+            start, end = _get_range_start("today")
 
         self.assertEqual(start, datetime(2026, 4, 26, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+        self.assertIsNone(end)
 
     def test_admin_dashboard_defaults_to_today(self):
         user = User.objects.create_user(username="admin", password="password", is_staff=True)

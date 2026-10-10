@@ -3,6 +3,15 @@
 
 {% block title %}请求事件{% endblock %}
 
+{% block extra_head %}
+<style>
+    main.container { max-width: 100%; width: 100%; padding-left: 2rem; padding-right: 2rem; }
+    @media (min-width: 1400px) { main.container { max-width: 1600px; } }
+</style>
+{% endblock %}
+
+{% block body_class %}events-page{% endblock %}
+
 {% block content %}
 <section class="page-hero mb-4">
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
@@ -12,18 +21,21 @@
             <p class="text-muted mb-0">实时展示每个 API 请求的详细信息，包括延迟、Token 明细等。</p>
         </div>
         <div class="d-flex align-items-center gap-2">
-            <span class="badge text-bg-primary rounded-pill px-3 py-2">共 {{ page_obj.paginator.count }} 条</span>
-            <button class="btn btn-sm btn-soft" id="syncBtn" onclick="syncEvents()"><i class="bi bi-arrow-repeat me-1"></i>同步最新</button>
+            <span class="ev-count-badge">共 {{ page_obj.paginator.count }} 条</span>
+            <button class="ev-sync-btn" id="syncBtn" onclick="syncEvents()">
+                <i class="bi bi-arrow-repeat"></i>
+                <span>同步最新</span>
+            </button>
         </div>
     </div>
 </section>
 
 <!-- Filters -->
-<div class="card panel-card mb-4"><div class="card-body py-3">
-    <form method="get" class="row g-2 align-items-end">
-        <div class="col-auto">
-            <label class="form-label small text-muted mb-1">时间范围</label>
-            <select name="range" class="form-select form-select-sm" onchange="this.form.submit()">
+<section class="ev-filter-card mb-4">
+    <form method="get" class="ev-filter-form">
+        <div class="ev-filter-group">
+            <label>时间范围</label>
+            <select name="range" class="ev-filter-select" onchange="this.form.submit()">
                 <option value="today" {% if range_name == "today" %}selected{% endif %}>今天</option>
                 <option value="last_hour" {% if range_name == "last_hour" %}selected{% endif %}>最近1小时</option>
                 <option value="last_7_days" {% if range_name == "last_7_days" %}selected{% endif %}>最近7天</option>
@@ -31,43 +43,43 @@
                 <option value="all" {% if range_name == "all" %}selected{% endif %}>全部</option>
             </select>
         </div>
-        <div class="col-auto">
-            <label class="form-label small text-muted mb-1">Provider</label>
-            <select name="provider" class="form-select form-select-sm" onchange="this.form.submit()">
+        <div class="ev-filter-group">
+            <label>Provider</label>
+            <select name="provider" class="ev-filter-select" onchange="this.form.submit()">
                 <option value="">全部</option>
                 {% for p in providers %}
                 <option value="{{ p }}" {% if provider_filter == p %}selected{% endif %}>{{ p }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="col-auto">
-            <label class="form-label small text-muted mb-1">模型</label>
-            <select name="model" class="form-select form-select-sm" onchange="this.form.submit()">
+        <div class="ev-filter-group">
+            <label>模型</label>
+            <select name="model" class="ev-filter-select ev-filter-select-wide" onchange="this.form.submit()">
                 <option value="">全部</option>
                 {% for m in models_list %}
                 <option value="{{ m }}" {% if model_filter == m %}selected{% endif %}>{{ m }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="col-auto">
-            <button type="submit" class="btn btn-sm btn-primary">筛选</button>
-            <a href="{% url 'request-events' %}" class="btn btn-sm btn-outline-secondary ms-1">重置</a>
+        <div class="ev-filter-actions">
+            <a href="{% url 'request-events' %}" class="ev-filter-reset-btn">重置</a>
         </div>
     </form>
-</div></div>
+</section>
 
 <!-- Events Table -->
-<div class="card panel-card"><div class="card-body p-0">
+<section class="ev-table-card">
     <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0 events-table">
+        <table class="ev-table">
             <thead>
                 <tr>
-                    <th style="min-width:140px;">时间</th>
+                    <th class="ev-th-time">时间</th>
                     <th>用户</th>
                     <th>令牌</th>
                     <th>Provider</th>
                     <th>模型</th>
-                    <th class="text-end">延迟</th>
+                    <th class="text-end">总耗时</th>
+                    <th class="text-end">首字(估)</th>
                     <th class="text-end">输入</th>
                     <th class="text-end">输出</th>
                     <th class="text-end">缓存</th>
@@ -77,48 +89,54 @@
             </thead>
             <tbody>
             {% for log in page_obj %}
-            <tr>
-                <td class="text-nowrap small">{{ log.request_time|date:"m-d H:i:s" }}</td>
-                <td class="text-truncate" style="max-width:140px;" title="{{ log.user_identifier }}">
+            <tr class="ev-row">
+                <td class="ev-cell-time">{{ log.request_time|date:"m-d H:i:s" }}</td>
+                <td class="ev-cell-user" title="{{ log.user_identifier }}">
                     {% if is_admin %}
-                        {{ log.user_identifier|default:"-" }}
+                        {% if log.user and log.user.profile and log.user.profile.display_name %}{{ log.user.profile.display_name }}{% else %}{{ log.user_identifier|default:"-" }}{% endif %}
                     {% else %}
-                        {% if log.user_identifier %}{{ log.user_identifier|make_list|first }}***{% else %}-{% endif %}
+                        {% if log.user and log.user.profile and log.user.profile.display_name %}{{ log.user.profile.display_name }}{% elif log.user_identifier %}{{ log.user_identifier|make_list|first }}***{% else %}-{% endif %}
                     {% endif %}
                 </td>
-                <td class="text-truncate small" style="max-width:120px;">
+                <td class="ev-cell-key">
                     {% if is_admin %}
-                        {{ log.api_key_identifier|default:"-"|truncatechars:16 }}
+                        {{ log.api_key_identifier|default:"-"|truncatechars:18 }}
                     {% else %}
                         {% if log.api_key_identifier %}sk-***{{ log.api_key_identifier|slice:"-4:" }}{% else %}-{% endif %}
                     {% endif %}
                 </td>
-                <td><span class="badge text-bg-light border">{{ log.provider|default:"-" }}</span></td>
-                <td class="small">{{ log.model_name }}</td>
-                <td class="text-end text-nowrap">
+                <td><span class="ev-provider-badge">{{ log.provider|default:"-" }}</span></td>
+                <td class="ev-cell-model">{{ log.model_name }}</td>
+                <td class="text-end">
                     {% if log.latency_ms > 0 %}
-                    <span class="badge latency-badge {% if log.latency_ms < 3000 %}latency-good{% elif log.latency_ms < 10000 %}latency-warn{% else %}latency-bad{% endif %}">
-                        {{ log.latency_ms }}ms
+                    <span class="ev-latency {% if log.latency_ms < 3000 %}ev-latency-good{% elif log.latency_ms < 10000 %}ev-latency-warn{% else %}ev-latency-bad{% endif %}">
+                        {{ log.latency_ms|ms_to_sec }}s
                     </span>
-                    {% else %}-{% endif %}
+                    {% else %}<span class="ev-cell-muted">-</span>{% endif %}
                 </td>
-                <td class="text-end small">{{ log.prompt_tokens }}</td>
-                <td class="text-end small">{{ log.completion_tokens }}</td>
-                <td class="text-end small">{{ log.cached_tokens|default:0 }}</td>
-                <td class="text-end small">{{ log.reasoning_tokens|default:0 }}</td>
+                <td class="text-end">
+                    {% if log.latency_ms > 0 and log.completion_tokens > 0 %}
+                    {% widthratio log.completion_tokens 1 20 as gen_time_ms %}
+                    <span class="ev-ttfb">{{ log.latency_ms|ttfb_estimate:log.completion_tokens }}s</span>
+                    {% else %}<span class="ev-cell-muted">-</span>{% endif %}
+                </td>
+                <td class="text-end ev-cell-num">{{ log.prompt_tokens }}</td>
+                <td class="text-end ev-cell-num">{{ log.completion_tokens }}</td>
+                <td class="text-end ev-cell-num">{{ log.cached_tokens|default:0 }}</td>
+                <td class="text-end ev-cell-num">{{ log.reasoning_tokens|default:0 }}</td>
                 <td class="text-center">
                     {% if log.is_error %}
-                    <span class="badge text-bg-danger">失败</span>
+                    <span class="ev-status ev-status-fail">失败</span>
                     {% else %}
-                    <span class="badge text-bg-success">成功</span>
+                    <span class="ev-status ev-status-ok">成功</span>
                     {% endif %}
                 </td>
             </tr>
             {% empty %}
             <tr>
-                <td colspan="11" class="text-center text-muted py-5">
-                    <i class="bi bi-inbox" style="font-size:2rem;"></i>
-                    <p class="mt-2 mb-0">暂无请求事件数据</p>
+                <td colspan="12" class="ev-empty-state">
+                    <i class="bi bi-inbox"></i>
+                    <p>暂无请求事件数据</p>
                 </td>
             </tr>
             {% endfor %}
@@ -127,28 +145,26 @@
     </div>
 
     {% if page_obj.has_other_pages %}
-    <div class="d-flex justify-content-between align-items-center px-3 py-3 border-top">
-        <small class="text-muted">第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</small>
-        <nav>
-            <ul class="pagination pagination-sm mb-0">
-                {% if page_obj.has_previous %}
-                <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}&range={{ range_name }}&provider={{ provider_filter }}&model={{ model_filter }}">上一页</a></li>
+    <div class="ev-pagination">
+        <span class="ev-pagination-info">第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</span>
+        <div class="ev-pagination-controls">
+            {% if page_obj.has_previous %}
+            <a class="ev-page-btn" href="?page={{ page_obj.previous_page_number }}&range={{ range_name }}&provider={{ provider_filter }}&model={{ model_filter }}">上一页</a>
+            {% endif %}
+            {% for num in page_obj.paginator.page_range %}
+                {% if page_obj.number == num %}
+                <span class="ev-page-btn ev-page-btn-active">{{ num }}</span>
+                {% elif num > page_obj.number|add:"-3" and num < page_obj.number|add:"3" %}
+                <a class="ev-page-btn" href="?page={{ num }}&range={{ range_name }}&provider={{ provider_filter }}&model={{ model_filter }}">{{ num }}</a>
                 {% endif %}
-                {% for num in page_obj.paginator.page_range %}
-                    {% if page_obj.number == num %}
-                    <li class="page-item active"><span class="page-link">{{ num }}</span></li>
-                    {% elif num > page_obj.number|add:"-3" and num < page_obj.number|add:"3" %}
-                    <li class="page-item"><a class="page-link" href="?page={{ num }}&range={{ range_name }}&provider={{ provider_filter }}&model={{ model_filter }}">{{ num }}</a></li>
-                    {% endif %}
-                {% endfor %}
-                {% if page_obj.has_next %}
-                <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}&range={{ range_name }}&provider={{ provider_filter }}&model={{ model_filter }}">下一页</a></li>
-                {% endif %}
-            </ul>
-        </nav>
+            {% endfor %}
+            {% if page_obj.has_next %}
+            <a class="ev-page-btn" href="?page={{ page_obj.next_page_number }}&range={{ range_name }}&provider={{ provider_filter }}&model={{ model_filter }}">下一页</a>
+            {% endif %}
+        </div>
     </div>
     {% endif %}
-</div></div>
+</section>
 {% endblock %}
 
 {% block extra_js %}
@@ -156,7 +172,8 @@
 function syncEvents() {
     var btn = document.getElementById('syncBtn');
     btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-arrow-repeat spin-animation me-1"></i>同步中...';
+    btn.classList.add('ev-sync-btn-loading');
+    btn.querySelector('span').textContent = '同步中...';
 
     fetch('{% url "request-events-sync" %}', {
         method: 'POST',
@@ -166,7 +183,8 @@ function syncEvents() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>同步最新';
+        btn.classList.remove('ev-sync-btn-loading');
+        btn.querySelector('span').textContent = '同步最新';
         if (data.ok) {
             var msg = '同步完成：导入 ' + (data.imported || 0) + ' 条，跳过 ' + (data.skipped || 0) + ' 条';
             showToast(msg, 'success');
@@ -179,18 +197,20 @@ function syncEvents() {
     })
     .catch(function(err) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>同步最新';
+        btn.classList.remove('ev-sync-btn-loading');
+        btn.querySelector('span').textContent = '同步最新';
         showToast('网络错误', 'danger');
     });
 }
 
 function showToast(msg, type) {
-    var container = document.querySelector('.container');
+    var main = document.querySelector('main');
     var alert = document.createElement('div');
-    alert.className = 'alert alert-' + type + ' alert-dismissible fade show mt-2 shadow-sm border-0';
+    alert.className = 'alert alert-' + type + ' alert-dismissible fade show shadow-sm border-0';
+    alert.style.borderRadius = '14px';
     alert.innerHTML = msg + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
-    container.insertBefore(alert, container.firstChild);
-    setTimeout(function() { alert.remove(); }, 5000);
+    main.insertBefore(alert, main.firstChild);
+    setTimeout(function() { if (alert.parentNode) alert.remove(); }, 5000);
 }
 
 function getCookie(name) {
@@ -223,13 +243,365 @@ function getCookie(name) {
 })();
 </script>
 <style>
-.spin-animation { animation: spin 1s linear infinite; display: inline-block; }
-@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.events-table th { font-size: 0.78rem; font-weight: 600; color: #64748b; border-bottom: 2px solid #e2e8f0; padding: 0.6rem 0.5rem; }
-.events-table td { font-size: 0.82rem; padding: 0.5rem; border-bottom: 1px solid #f1f5f9; }
-.latency-badge { font-size: 0.72rem; font-weight: 500; padding: 0.25em 0.6em; }
-.latency-good { background-color: #dcfce7 !important; color: #166534 !important; }
-.latency-warn { background-color: #fef3c7 !important; color: #92400e !important; }
-.latency-bad { background-color: #fee2e2 !important; color: #991b1b !important; }
+/* ===== Count Badge ===== */
+.ev-count-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.2);
+    color: #4f46e5;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+/* ===== Sync Button ===== */
+.ev-sync-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(148,163,184,0.2);
+    background: rgba(248,250,252,0.9);
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.ev-sync-btn:hover:not(:disabled) {
+    border-color: rgba(99,102,241,0.4);
+    background: rgba(99,102,241,0.06);
+    color: #4f46e5;
+    transform: translateY(-1px);
+}
+.ev-sync-btn:disabled { opacity: 0.6; cursor: wait; }
+.ev-sync-btn-loading i { animation: ev-spin 1s linear infinite; display: inline-block; }
+
+/* ===== Filter Card ===== */
+.ev-filter-card {
+    border: 1px solid rgba(148,163,184,0.15);
+    border-radius: 18px;
+    background: rgba(255,255,255,0.88);
+    backdrop-filter: blur(8px);
+    padding: 16px 22px;
+    box-shadow: 0 6px 20px rgba(15,23,42,0.04);
+}
+
+.ev-filter-form {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.ev-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ev-filter-group label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ev-filter-select {
+    height: 36px;
+    min-width: 120px;
+    padding: 0 32px 0 12px;
+    border: 1px solid rgba(148,163,184,0.25);
+    border-radius: 999px;
+    background: #fff;
+    color: #1e293b;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+    transition: border-color 0.15s ease;
+}
+.ev-filter-select:focus {
+    outline: none;
+    border-color: rgba(99,102,241,0.5);
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+}
+.ev-filter-select-wide { min-width: 160px; }
+
+.ev-filter-actions {
+    display: flex;
+    align-items: center;
+    padding-bottom: 2px;
+}
+.ev-filter-reset-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(148,163,184,0.2);
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+.ev-filter-reset-btn:hover {
+    background: #f1f5f9;
+    color: #334155;
+    border-color: rgba(148,163,184,0.35);
+}
+
+/* ===== Table Card ===== */
+.ev-table-card {
+    border: 1px solid rgba(148,163,184,0.15);
+    border-radius: 20px;
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 12px 36px rgba(15,23,42,0.06);
+    overflow: hidden;
+}
+
+/* ===== Table ===== */
+.ev-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.ev-table thead tr {
+    background: linear-gradient(180deg, #f8fafc, #f1f5f9);
+    border-bottom: 2px solid rgba(148,163,184,0.15);
+}
+
+.ev-table th {
+    padding: 14px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+.ev-th-time { min-width: 130px; }
+
+.ev-table .ev-row {
+    border-bottom: 1px solid rgba(148,163,184,0.08);
+    transition: background 0.1s ease;
+}
+.ev-table .ev-row:hover { background: rgba(99,102,241,0.03); }
+.ev-table .ev-row:last-child { border-bottom: 0; }
+
+.ev-table td {
+    padding: 12px 14px;
+    font-size: 13.5px;
+    color: #1e293b;
+    vertical-align: middle;
+}
+
+.ev-cell-time {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: #475569;
+    white-space: nowrap;
+}
+
+.ev-cell-user {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.ev-cell-key {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    color: #64748b;
+}
+
+.ev-cell-model {
+    font-weight: 600;
+    color: #334155;
+}
+
+.ev-cell-num {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: #475569;
+}
+
+.ev-cell-muted {
+    color: #cbd5e1;
+}
+
+/* ===== Provider Badge ===== */
+.ev-provider-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(148,163,184,0.2);
+    background: #f8fafc;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+/* ===== Latency Badge ===== */
+.ev-latency {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.ev-latency-good {
+    background: rgba(22,163,74,0.1);
+    border: 1px solid rgba(22,163,74,0.25);
+    color: #15803d;
+}
+.ev-latency-warn {
+    background: rgba(217,119,6,0.1);
+    border: 1px solid rgba(217,119,6,0.25);
+    color: #b45309;
+}
+.ev-latency-bad {
+    background: rgba(220,38,38,0.1);
+    border: 1px solid rgba(220,38,38,0.25);
+    color: #b91c1c;
+}
+
+/* ===== TTFB Estimate ===== */
+.ev-ttfb {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    background: rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.2);
+    color: #4f46e5;
+}
+
+/* ===== Status Badge ===== */
+.ev-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+}
+.ev-status-ok {
+    background: rgba(22,163,74,0.1);
+    border: 1px solid rgba(22,163,74,0.2);
+    color: #15803d;
+}
+.ev-status-fail {
+    background: rgba(220,38,38,0.1);
+    border: 1px solid rgba(220,38,38,0.2);
+    color: #b91c1c;
+}
+
+/* ===== Empty State ===== */
+.ev-empty-state {
+    text-align: center;
+    padding: 56px 24px;
+    color: #94a3b8;
+}
+.ev-empty-state i {
+    font-size: 2.5rem;
+    display: block;
+    margin-bottom: 12px;
+}
+.ev-empty-state p {
+    margin: 0;
+    font-size: 14px;
+}
+
+/* ===== Pagination ===== */
+.ev-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 22px;
+    border-top: 1px solid rgba(148,163,184,0.1);
+}
+
+.ev-pagination-info {
+    font-size: 13px;
+    font-weight: 700;
+    color: #64748b;
+}
+
+.ev-pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ev-page-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid rgba(148,163,184,0.2);
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+.ev-page-btn:hover {
+    border-color: rgba(99,102,241,0.4);
+    background: rgba(99,102,241,0.06);
+    color: #4f46e5;
+    transform: translateY(-1px);
+}
+.ev-page-btn-active {
+    background: #4f46e5;
+    border-color: #4f46e5;
+    color: #fff;
+    cursor: default;
+}
+.ev-page-btn-active:hover {
+    background: #4f46e5;
+    border-color: #4f46e5;
+    color: #fff;
+    transform: none;
+}
+
+/* ===== Animation ===== */
+@keyframes ev-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+    .ev-filter-form { flex-direction: column; align-items: stretch; }
+    .ev-filter-select { width: 100%; }
+    .ev-table th, .ev-table td { padding: 10px 8px; font-size: 12px; }
+    .ev-pagination { flex-direction: column; gap: 10px; }
+}
 </style>
 {% endblock %}
