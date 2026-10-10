@@ -24,6 +24,9 @@
 #                               manual deploy, or to stop a back-catalogue tag
 #                               from being deployed)
 #     deploy.sh --tag v1.2.3    force-deploy a specific tag
+#     deploy.sh --convert <tag> one-time bootstrap: turn the existing real
+#                               directory into the first release and replace it
+#                               with the stable symlink (see README, "bootstrap")
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -40,6 +43,7 @@ FORCED_TAG=""
 case "${1:-}" in
   --check)    MODE="check" ;;
   --baseline) MODE="baseline" ;;
+  --convert)  MODE="convert"; FORCED_TAG="${2:-}"; [ -n "$FORCED_TAG" ] || { echo "FATAL: --convert needs a tag name" >&2; exit 3; } ;;
   --tag)      MODE="run"; FORCED_TAG="${2:-}"; [ -n "$FORCED_TAG" ] || { echo "FATAL: --tag needs a value" >&2; exit 3; } ;;
   --dry-run)  MODE="run"; DRY_RUN=1 ;;
   "")         ;;
@@ -64,11 +68,82 @@ log() {
 die() { log "ERROR: $*"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 0. preflight
+# 0. recovery for the bootstrap failure mode.
+#
+#    --convert lifts .env / .venv / media / staticfiles out of the code tree
+#    while the service is stopped. If anything after that point fails, those
+#    items are the only thing standing between the portal and a dead service,
+#    so the recovery path is defined right here and both the health check and
+#    backup helpers are declared before anything can call them.
+# ---------------------------------------------------------------------------
+SHARED_DIR="${SHARED_DIR:-${APP_LINK}.shared}"
+SHARED_ITEMS=(.env .venv media staticfiles)
+
+restore_app_link() {
+  local item
+  for item in "${SHARED_ITEMS[@]}"; do
+    [ -e "${SHARED_DIR}/${item}" ] || continue
+    if [ -L "${APP_LINK}/${item}" ] && [ "$(readlink "${APP_LINK}/${item}")" = "${SHARED_DIR}/${item}" ]; then
+      continue
+    fi
+    if [ -e "${APP_LINK}/${item}" ] && [ ! -L "${APP_LINK}/${item}" ]; then
+      rm -rf "${APP_LINK:?}/${item}"
+    fi
+    ln -sfn "${SHARED_DIR}/${item}" "${APP_LINK}/${item}"
+    log "restored ${APP_LINK}/${item} -> ${SHARED_DIR}/${item}"
+  done
+}
+
+health_check() {
+  local spec url want code attempt all_ok
+  local -a hdr=()
+  # NOTE: `[ -n ... ] && hdr=(...)` would be the last command of this function
+  # body and would abort the whole script under `set -e` whenever the test is
+  # false. Always use a real if.
+  if [ -n "${HEALTH_HOST:-}" ]; then
+    hdr=(-H "Host: ${HEALTH_HOST}")
+  fi
+  for attempt in $(seq 1 "$HEALTH_RETRIES"); do
+    all_ok=1
+    for spec in $HEALTH_CHECKS; do
+      url="${spec%:*}"                 # strips only the final :status
+      want="${spec##*:}"
+      [ "$want" = "$url" ] && want=200 # no ":status" given
+      code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "${hdr[@]}" "$url" || echo 000)"
+      [ "$code" = "$want" ] || all_ok=0
+    done
+    if [ "$all_ok" = "1" ]; then
+      log "health check passed on attempt ${attempt}"
+      break
+    fi
+    if [ "$attempt" = "$HEALTH_RETRIES" ]; then
+      log "health check FAILED after ${HEALTH_RETRIES} attempts"
+      return 1
+    fi
+    sleep "$HEALTH_DELAY"
+  done
+  if [ -n "${EXTRA_HEALTH_CHECK:-}" ]; then
+    url="${EXTRA_HEALTH_CHECK%:*}"
+    want="${EXTRA_HEALTH_CHECK##*:}"
+    if [ "$want" = "$url" ]; then want=200; fi
+    code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$url" || echo 000)"
+    if [ "$code" = "$want" ]; then
+      log "extra health check passed: $url -> $code"
+    else
+      log "extra health check FAILED: $url -> $code (wanted $want)"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# 1. preflight
 # ---------------------------------------------------------------------------
 preflight() {
   local rc=0
-  for t in git curl tar python3; do
+  local t
+  for t in git curl tar python3 pg_dump; do
     command -v "$t" >/dev/null 2>&1 || { log "preflight: MISSING $t"; rc=1; }
   done
   [ -x "${VENV}/bin/python" ] || { log "preflight: MISSING venv at ${VENV}/bin/python"; rc=1; }
@@ -81,6 +156,79 @@ preflight() {
 if ! preflight; then
   [ "$MODE" = "check" ] && exit 4
   die "preflight failed"
+fi
+
+# ---------------------------------------------------------------------------
+# 1b. one-time bootstrap: real directory -> symlink + release 0
+#
+#     Shared state (.env, .venv, media, staticfiles) is lifted OUT of the code
+#     tree into SHARED_DIR and symlinked back in. A release is therefore pure
+#     code, and no release or prune can ever touch the environment file, the
+#     virtualenv, uploaded media or collected static files.
+#
+#     The code directory itself is NOT moved: it becomes
+#     ${RELEASES_DIR}/<tag> by renaming the existing top-level directory into
+#     the releases directory, which is already in place. If that rename fails,
+#     the original tree is restored and the service is brought back up.
+# ---------------------------------------------------------------------------
+convert_mode() {
+  local tag="$1"
+  [ -L "$APP_LINK" ] && die "convert: $APP_LINK is already a symlink; nothing to convert"
+  [ -d "$APP_LINK" ] || die "convert: $APP_LINK is not a directory"
+  # SHARED_DIR/RELEASES_DIR must sit outside the code tree, otherwise moving
+  # the tree would move them along with it.
+  case "$SHARED_DIR/" in
+    "$APP_LINK"/*) die "convert: SHARED_DIR='$SHARED_DIR' must NOT be inside $APP_LINK" ;;
+  esac
+  case "$RELEASES_DIR/" in
+    "$APP_LINK"/*) die "convert: RELEASES_DIR='$RELEASES_DIR' must NOT be inside $APP_LINK" ;;
+  esac
+
+  log "=== convert: bootstrapping the symlink layout ==="
+  systemctl stop "$SERVICE" || die "convert: cannot stop $SERVICE"
+  log "convert: $SERVICE stopped"
+
+  local item
+  mkdir -p "$SHARED_DIR"
+  for item in "${SHARED_ITEMS[@]}"; do
+    if [ -e "${APP_LINK}/${item}" ] && [ ! -L "${APP_LINK}/${item}" ]; then
+      mv -T "${APP_LINK}/${item}" "${SHARED_DIR}/${item}" \
+        || { restore_app_link; systemctl start "$SERVICE"; die "convert: cannot move ${item} into shared storage"; }
+      log "convert: moved ${item} into shared storage"
+    fi
+  done
+  restore_app_link
+
+  # systemd and nginx see identical paths before and after, so nothing is edited
+  systemctl start "$SERVICE" || { restore_app_link; die "convert: cannot start $SERVICE"; }
+  log "convert: $SERVICE started through the shared symlinks"
+  if ! health_check; then
+    log "convert: portal is NOT healthy yet — the code tree is untouched and still at $APP_LINK"
+    log "convert: check journalctl -u $SERVICE, then re-run: deploy.sh --convert $tag"
+    exit 1
+  fi
+
+  mkdir -p "${RELEASES_DIR}/${tag}"
+  if ! mv -T "$APP_LINK" "${RELEASES_DIR}/${tag}"; then
+    log "convert: renaming the code tree failed — restoring it"
+    rmdir "${RELEASES_DIR}/${tag}" 2>/dev/null || true
+    ln -sfn "${RELEASES_DIR}/${tag}" "$APP_LINK"   # only safe if the rename really did not happen
+    die "convert: could not move $APP_LINK into $RELEASES_DIR"
+  fi
+  ln -sfn "${RELEASES_DIR}/${tag}" "$APP_LINK"
+  # .env must stay reachable at the stable path in its own right: the portal's
+  # EnvironmentFile and this script both read $APP_LINK/.env
+  ln -sfn "${SHARED_DIR}/.env" "${APP_LINK}/.env"
+
+  echo "$tag" > "$LAST_TAG_FILE"
+  log "convert: ${APP_LINK} -> $(readlink -f "$APP_LINK")"
+  log "=== convert OK: recorded ${tag} as the live release ==="
+  log "next: bash $GATEWAY_DIR/deploy.sh --check, then enable the timer"
+  exit 0
+}
+
+if [ "$MODE" = "convert" ]; then
+  convert_mode "$FORCED_TAG"
 fi
 
 # ---------------------------------------------------------------------------
@@ -107,7 +255,7 @@ if [ "$MODE" = "check" ]; then
   log "check: repo=$DEPLOY_REPO_URL"
   log "check: app_link=$APP_LINK -> $(readlink -f "$APP_LINK" 2>/dev/null || echo '(not a symlink)')"
   log "check: currently deployed tag = '$(current_tag)'"
-  log "check: health urls = $HEALTH_URLS"
+  log "check: health checks = $HEALTH_CHECKS"
   log "check: remote tags reachable:"
   remote_tags | sed 's/^/        /' || true
   log "check: OK (nothing was changed)"
@@ -117,8 +265,13 @@ fi
 # ---------------------------------------------------------------------------
 # 3. pick the target tag
 # ---------------------------------------------------------------------------
-LATEST="$(remote_tags | tail -1)"
-[ -n "$FORCED_TAG" ] && LATEST="$FORCED_TAG"
+LATEST="$(remote_tags | tail -1 || true)"
+# NOTE: an `[ -n ... ] && var=...` one-liner is fatal here — the variable
+# assignment would be the last command, so a false test exits the script under
+# `set -e` right when a tag was passed on the command line.
+if [ -n "$FORCED_TAG" ]; then
+  LATEST="$FORCED_TAG"
+fi
 if [ -z "$LATEST" ]; then
   log "no tags match '${DEPLOY_TAG_PATTERN}' on ${DEPLOY_REPO_URL} — nothing to do"
   exit 0
@@ -143,7 +296,10 @@ if [ -n "$CURRENT" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$CURRENT" | sort -V | 
 fi
 
 log "=== deploy triggered: ${CURRENT:-<none>} -> ${LATEST} ==="
-[ "$DRY_RUN" = "1" ] && { log "DRY_RUN=1: would deploy ${LATEST}; stopping here"; exit 0; }
+if [ "$DRY_RUN" = "1" ]; then
+  log "DRY_RUN=1: would deploy ${LATEST}; stopping here"
+  exit 0
+fi
 
 RELEASE_DIR="${RELEASES_DIR}/${LATEST}"
 BUILD_DIR="${TORCH_DIR}/build-${LATEST}"
@@ -181,6 +337,10 @@ build_release() {
     || die "download failed: $url"
   [ -s "$tarball" ] || die "downloaded tarball is empty"
 
+  # create the extraction directory here: nothing else does, and `tar`
+  # cannot create it itself
+  rm -rf "$RELEASE_DIR.tmp"
+  mkdir -p "$RELEASE_DIR.tmp"
   tar -xzf "$tarball" -C "$RELEASE_DIR.tmp" --strip-components=1
   log "extracted $(find "$RELEASE_DIR.tmp" -type f | wc -l) files"
 
@@ -212,9 +372,9 @@ build_release() {
   rm -rf "$RELEASE_DIR"
   mv -T "$RELEASE_DIR.tmp" "$RELEASE_DIR"
   # shared, not part of the release and never overwritten by one
-  ln -sfn "${APP_LINK}/.env"   "$RELEASE_DIR/.env"
-  ln -sfn "${APP_LINK}/media"  "$RELEASE_DIR/media"
-  ln -sfn "${APP_LINK}/staticfiles" "$RELEASE_DIR/staticfiles"
+  for item in "${SHARED_ITEMS[@]}"; do
+    ln -sfn "${SHARED_DIR}/${item}" "$RELEASE_DIR/${item}"
+  done
   log "release staged at ${RELEASE_DIR}"
 }
 
@@ -239,7 +399,11 @@ backup_database() {
   [ "$host" = "localhost" ] && host="127.0.0.1"
   PGPASSWORD="$pass" pg_dump -h "$host" -p "$port" -U "$user" -d "$db" \
       --no-owner --no-privileges 2>"${STATE_DIR}/pgdump.err" | gzip > "$out"
-  local rc=${PIPESTATUS[0]}            # NOT $? — that is gzip's status
+  # NOT $? — that is gzip's status. Write the pipeline status out explicitly so
+  # this does not depend on how a given bash build treats assignments.
+  local rc
+  printf '%s' "${PIPESTATUS[0]}" > "${STATE_DIR}/.pgdump.rc"
+  rc="$(cat "${STATE_DIR}/.pgdump.rc")"
   if [ "$rc" -ne 0 ]; then
     log "pg_dump failed: $(head -c 300 "${STATE_DIR}/pgdump.err")"
     rm -f "$out"; return 1
@@ -254,28 +418,6 @@ backup_database() {
     rm -f "$out"; return 1
   fi
   log "database backup OK: $out ($(stat -c %s "$out") bytes)"
-}
-
-# ---------------------------------------------------------------------------
-# 6. health check
-# ---------------------------------------------------------------------------
-health_check() {
-  local url attempt
-  for attempt in $(seq 1 "$HEALTH_RETRIES"); do
-    local all_ok=1
-    for url in $HEALTH_URLS; do
-      local code
-      code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$url" || echo 000)"
-      [ "$code" = "200" ] || all_ok=0
-    done
-    if [ "$all_ok" = "1" ]; then
-      log "health check passed on attempt ${attempt}"
-      return 0
-    fi
-    sleep "$HEALTH_DELAY"
-  done
-  log "health check FAILED after ${HEALTH_RETRIES} attempts"
-  return 1
 }
 
 # ---------------------------------------------------------------------------

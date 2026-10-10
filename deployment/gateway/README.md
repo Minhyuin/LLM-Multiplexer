@@ -28,7 +28,7 @@ written to.
 |---|---|
 | `/root/pioneer-portal` | **symlink** to the live release (nginx and systemd keep using this exact path, which is why nothing else has to change) |
 | `/root/pioneer-portal.releases/<tag>/` | one immutable directory per deployed tag |
-| `/root/pioneer-portal/.env`, `.venv`, `media`, `staticfiles` | shared state, reached through the symlink, never overwritten by a release |
+| `/root/pioneer-portal.shared/` | shared state (`.env`, `.venv`, `media`, `staticfiles`); each release symlinks to it, so no deploy or prune can destroy it |
 | `/root/pioneer-portal.deploy/state/` | `last_deployed_tag`, `previous_release`, `LAST_FAILURE`, pre-deploy DB dumps |
 | `/root/pioneer-portal.deploy/torch/` | staging + wheelhouse (cleaned after every run) |
 | `/var/log/pioneer-portal/deploy.log` | one line per event; `build.log` holds pip/django output |
@@ -64,6 +64,7 @@ $G                      # what the timer runs
 $G --baseline           # record the highest remote tag as deployed WITHOUT deploying
 $G --tag v1.2.3         # force-deploy a specific tag (also the way to force a downgrade)
 $G --dry-run            # report what would happen
+$G --convert v0.0.1     # one-time bootstrap only (see below)
 ```
 
 ## Recovery
@@ -119,19 +120,27 @@ systemctl disable --now pioneer-portal-deploy.timer
 
 ## First-time bootstrap (already done, kept for rebuilds)
 
+Bootstrap is what turns the ordinary directory into a symlink plus release 0.
+It is the only operation here that moves the live tree, so it is a single
+explicit command rather than something the timer could ever reach:
+
 ```bash
-# 1. freeze the current tree as the first immutable release
-mkdir -p /root/pioneer-portal.releases
-cp -a /root/pioneer-portal /root/pioneer-portal.releases/R0
-# 2. shared state back into place, then swap the real directory for the symlink
-mkdir -p /root/pioneer-portal/{media,staticfiles}
-mv /root/pioneer-portal /root/pioneer-portal.orig && \
-  mv /root/pioneer-portal.orig /root/pioneer-portal.releases/R0  # adjust as needed
-ln -sfn /root/pioneer-portal.releases/R0 /root/pioneer-portal
-# 3. verify BEFORE enabling the timer
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8002/health/
-deploy.sh --check
-# 4. decide the baseline, then start polling
-deploy.sh --baseline      # or deploy one tag on purpose
+G=/root/pioneer-portal/deployment/gateway/deploy.sh
+
+# 1. convert: stop the service, lift .env/.venv/media/staticfiles into
+#    /root/pioneer-portal.shared, restart, health-check, then move the code
+#    tree itself to /root/pioneer-portal.releases/<tag> and symlink it back.
+#    The tag given here is recorded as already deployed.
+$G --convert v0.0.1
+
+# 2. verify BEFORE enabling the timer
+$G --check
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/health/
+
+# 3. start polling
 systemctl enable --now pioneer-portal-deploy.timer
 ```
+
+After step 1 the service is reachable at exactly the same paths as before
+(`/root/pioneer-portal/lab_portal`, `.venv`, `.env`), because `--convert`
+verifies the shared symlinks resolve *before* it moves anything.
