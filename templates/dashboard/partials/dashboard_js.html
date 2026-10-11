@@ -1,3 +1,34 @@
+{{ personal_summary.models|json_script:'personal-model-data' }}
+{{ dashboard.model_rank|json_script:'team-model-data' }}
+<script>
+(() => {
+    const palette = ['#5a7a6b','#7ba0b8','#a58a61','#a06c60','#607683','#5a7a6b','#b3947c'];
+    for (const [canvasId, dataId] of [['personalModelPieChart', 'personal-model-data'], ['teamModelUsageChart', 'team-model-data']]) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) continue;
+        const models = JSON.parse(document.getElementById(dataId).textContent) || [];
+        const total = models.reduce((sum, item) => sum + Number(item.total_tokens || 0), 0);
+        if (!total) {
+            const empty = document.createElement('p');
+            empty.className = 'text-muted text-center my-4';
+            empty.textContent = '暂无 Token 用量';
+            canvas.replaceWith(empty);
+            continue;
+        }
+        new Chart(canvas, {
+            type: 'doughnut',
+            data: {labels: models.map(item => item.model_name), datasets: [{
+                data: models.map(item => Number(item.total_tokens || 0)),
+                backgroundColor: palette
+            }]},
+            options: {responsive: true, plugins: {
+                legend: {position: 'bottom', labels: {boxWidth: 12}},
+                tooltip: {callbacks: {label: context => `${context.label}: ${Number(context.raw).toLocaleString()} Tokens (${(Number(context.raw) / total * 100).toFixed(1)}%)`}}
+            }}
+        });
+    }
+})();
+</script>
 {{ dashboard.trend|json_script:'trend-data' }}
 {{ dashboard.model_rank|json_script:'model-rank-data' }}
 {{ dashboard.error_model_rank|json_script:'error-model-rank-data' }}

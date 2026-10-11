@@ -1,0 +1,28 @@
+<section class="card panel-card mb-4" aria-labelledby="activity-title"><div class="card-body">
+    <h5 id="activity-title" class="section-title">我的调用活跃度</h5>
+    <p class="small text-muted">近 365 天共 {{ activity.total }} 次调用 · 活跃 {{ activity.active_days }} 天。按站点时区统计，包含成功与失败请求，不随上方时间筛选变化。</p>
+    <div class="activity-scroll" tabindex="0" aria-label="个人调用日历，可横向滚动，聚焦日期查看调用次数">
+        <div class="activity-calendar">
+            <div class="activity-week activity-week-labels" aria-hidden="true"><span>&nbsp;</span><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+            {% for week in activity.weeks %}<div class="activity-week"><span class="activity-month">{{ week.month }}</span>
+                {% for day in week.days %}{% if day.valid %}<span tabindex="0" class="activity-cell activity-level-{{ day.level }}" aria-label="{{ day.date|date:'Y-m-d' }}：{{ day.calls }} 次调用" title="{{ day.date|date:'Y-m-d' }}：{{ day.calls }} 次调用"><span class="activity-tooltip">{{ day.date|date:'Y-m-d' }} · {{ day.calls }} 次</span></span>{% else %}<span class="activity-cell activity-outside" aria-hidden="true"></span>{% endif %}{% endfor %}
+            </div>{% endfor %}
+        </div>
+    </div>
+    <div class="activity-legend small mt-2"><span>每日调用</span><span class="activity-cell activity-level-0"></span>0 <span class="activity-cell activity-level-1"></span>1–9 <span class="activity-cell activity-level-2"></span>10–49 <span class="activity-cell activity-level-3"></span>50–99 <span class="activity-cell activity-level-4"></span>100+</div>
+</div></section>
+<style>
+.activity-scroll {overflow-x:auto; padding:32px 8px 12px;}
+.activity-calendar {display:flex; gap:4px; width:max-content;}
+.activity-week {display:grid; grid-template-rows:18px repeat(7,12px); gap:4px; width:12px;}
+.activity-week-labels {width:20px; font-size:10px; color:#666;}
+.activity-month {font-size:10px; white-space:nowrap; color:#666;}
+.activity-cell {display:inline-block; width:12px; height:12px; border-radius:2px; position:relative; flex-shrink:0;}
+.activity-level-0 {background:#e5e8e2;} .activity-level-1 {background:#b5d6a8;} .activity-level-2 {background:#79af78;} .activity-level-3 {background:#497d55;} .activity-level-4 {background:#28533e;}
+.activity-outside {background:transparent;}
+.activity-cell:focus-visible {outline:2px solid #3d3d3d; outline-offset:2px;}
+.activity-tooltip {display:none; position:absolute; bottom:18px; left:0; z-index:10; white-space:nowrap; background:#3d3d3d; color:#fff; padding:4px 7px; border-radius:3px; font-size:12px; pointer-events:none;}
+.activity-cell:hover .activity-tooltip,.activity-cell:focus .activity-tooltip {display:block;}
+.activity-week:nth-last-child(-n+12) .activity-tooltip {left:auto; right:0;}
+.activity-legend {display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+</style>

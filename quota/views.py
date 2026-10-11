@@ -7,6 +7,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from api_keys.models import APIKey
+from quota.activity import personal_activity
 from quota.models import UserQuotaSnapshot
 from usage.models import UsageLog
 
@@ -59,6 +60,7 @@ def my_quota(request):
     bound_keys = APIKey.objects.filter(user=request.user, status=APIKey.STATUS_ACTIVE).order_by("-created_at")
 
     return render(request, "quota/my_quota.html", {
+        "activity": personal_activity(request.user),
         "snapshot": snapshot,
         "snapshots": snapshots,
         "bound_keys": bound_keys,
