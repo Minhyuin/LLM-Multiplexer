@@ -44,9 +44,9 @@ new Chart(document.getElementById('trendChart'), {
         labels: trendData.map(x => x.date),
         datasets: [
             makeTokenDataset('输入 Tokens', 'prompt_tokens', '#85827b', 'rgba(133,130,123,.22)'),
-            makeTokenDataset('输出 Tokens', 'completion_tokens', '#22c55e', 'rgba(34,197,94,.18)'),
-            makeTokenDataset('缓存 Tokens', 'cached_tokens', '#f59e0b', 'rgba(245,158,11,.16)'),
-            makeTokenDataset('思考 Tokens', 'thinking_tokens', '#8b5cf6', 'rgba(139,92,246,.14)'),
+            makeTokenDataset('输出 Tokens', 'completion_tokens', '#5a7a6b', 'rgba(90,122,107,.18)'),
+            makeTokenDataset('缓存 Tokens', 'cached_tokens', '#a58a61', 'rgba(165,138,97,.16)'),
+            makeTokenDataset('思考 Tokens', 'thinking_tokens', '#607683', 'rgba(96,118,131,.14)'),
         ]
     },
     options: {
@@ -92,7 +92,7 @@ new Chart(document.getElementById('modelBarChart'), {
         datasets: [{
             label: 'Token',
             data: modelRank.map(x => x.total_tokens || 0),
-            backgroundColor: '#0d6efd',
+            backgroundColor: '#7ba0b8',
             minBarLength: 6,
         }]
     },
@@ -114,7 +114,7 @@ new Chart(document.getElementById('userBarChart'), {
         datasets: [{
             label: 'Token',
             data: userRank.map(x => x.total_tokens || 0),
-            backgroundColor: '#6f42c1',
+            backgroundColor: '#5a7a6b',
             minBarLength: 6,
         }]
     },
