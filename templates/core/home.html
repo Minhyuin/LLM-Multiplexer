@@ -38,5 +38,5 @@
         {% empty %}<div class="empty-state"><h3 class="h5">一个问题，就是一个开始</h3><p>分享你的实践、发现，或还没想明白的事。</p><a href="{% url 'discussion-create' %}">发起第一场讨论 <span aria-hidden="true">↗</span></a></div>{% endfor %}
     </section>
 </div>
-<footer class="home-motto"><span class="eyebrow-badge">our spirit</span><p>艰苦奋斗，求实创新，开疆破土，拓海立浪</p></footer>
+<footer class="home-motto"><span class="eyebrow-badge">our spirit</span><p>艰苦奋斗，求实创新，开疆破土，拓海立浪</p><p class="small text-muted mb-0" aria-label="当前门户版本">门户版本 · {{ portal_version }}</p></footer>
 {% endblock %}

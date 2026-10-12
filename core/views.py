@@ -13,6 +13,7 @@ from core.attachments import save_attachments
 from core.forms import AnnouncementForm, DiscussionPostForm, DiscussionTopicForm
 from core.models import Announcement, Attachment, DiscussionPost, DiscussionTopic
 from core.utils import admin_required
+from core.version import portal_release_version
 
 
 def _is_admin(user):
@@ -55,7 +56,7 @@ def _detail_context(request, topic, form=None):
 @require_http_methods(["GET", "HEAD"])
 def home(request):
     announcements = Announcement.objects.filter(is_published=True).order_by("-created_at", "-pk")[:5]
-    return render(request, "core/home.html", {"announcements": announcements, "discussion_topics": _topics()[:8]})
+    return render(request, "core/home.html", {"announcements": announcements, "discussion_topics": _topics()[:8], "portal_version": portal_release_version()})
 
 
 @login_required
