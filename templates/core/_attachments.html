@@ -1,0 +1,26 @@
+{% load ui_tags %}
+{% if attachments %}
+<ul class="attachment-list" aria-label="附件">
+    {% for attachment in attachments %}
+    <li class="attachment-item{% if attachment.can_serve_inline %} attachment-image{% endif %}">
+        {% if attachment.can_serve_inline %}
+        <a class="attachment-image-preview" href="{% url 'attachment-serve' attachment.pk %}" target="_blank" rel="noopener" aria-label="查看原图：{{ attachment.original_name }}">
+            <img src="{% url 'attachment-serve' attachment.pk %}" alt="{{ attachment.original_name }}" width="{{ attachment.width }}" height="{{ attachment.height }}" loading="lazy" decoding="async">
+        </a>
+        {% else %}
+        <span class="attachment-icon" aria-hidden="true"><i class="bi {{ attachment.mime_type|attachment_icon }}"></i></span>
+        {% endif %}
+        <div class="attachment-meta">
+            <a class="attachment-name" href="{% url 'attachment-serve' attachment.pk %}"{% if not attachment.can_serve_inline %} download{% endif %}>{{ attachment.original_name }}</a>
+            <span class="attachment-size">{{ attachment.size|human_filesize }}{% if attachment.width %} · {{ attachment.width }}×{{ attachment.height }}{% endif %}{% if not attachment.can_serve_inline %} · 下载{% endif %}</span>
+        </div>
+        {% if attachment.uploader_id == user.id or user.is_staff or user.profile.role == 'admin' %}
+        <form class="attachment-remove" method="post" action="{% url 'attachment-delete' attachment.pk %}">
+            {% csrf_token %}
+            <button class="btn btn-outline-danger btn-sm" type="submit" onclick="return confirm('删除此附件？')">删除附件</button>
+        </form>
+        {% endif %}
+    </li>
+    {% endfor %}
+</ul>
+{% endif %}

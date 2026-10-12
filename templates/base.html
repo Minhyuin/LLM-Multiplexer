@@ -1,4 +1,4 @@
-{% load ui_tags %}
+{% load static ui_tags %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -12,9 +12,44 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="/static/css/site.css?v=20260513a" rel="stylesheet">
     <link href="/static/css/scandinavian.css?v=1" rel="stylesheet">
+    <link href="{% static 'css/attachments.css' %}?v=2" rel="stylesheet">
+    <style>
+        /* Admin "view as" (account perspective / read-only preview) banner.
+           Flat sand surface drawn from the site palette: no gradient, no shadow. */
+        .view-as-banner {
+            position: sticky;
+            top: 0;
+            z-index: 1035;
+            padding: 0.5rem 0;
+            color: #5f5139;
+            background: #eee4cf;
+            border-bottom: 1px solid var(--card-border, #d4cdc5);
+            box-shadow: none;
+        }
+        .view-as-banner .badge { font-weight: 600; }
+        .view-as-banner .view-as-banner-text { font-size: 0.9rem; }
+        .view-as-banner strong { font-weight: 600; }
+        .view-as-banner .btn { box-shadow: none; }
+    </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body class="site-body {% block body_class %}{% endblock %}">
+{% if request.view_as.active and request.user.is_authenticated %}
+<div class="view-as-banner" role="status" aria-live="polite">
+    <div class="container-fluid px-3 px-lg-4 d-flex flex-wrap align-items-center gap-2">
+        <span class="badge text-bg-warning"><i class="bi bi-eye-fill me-1"></i>账户视角 · 只读预览</span>
+        <span class="view-as-banner-text">
+            正在以 <strong>{{ request.view_as.target_user.username }}</strong>{% if request.view_as.target_user.profile.display_name %}（{{ request.view_as.target_user.profile.display_name }}）{% endif %} 的账户视角浏览，仅作只读预览，所有写操作已禁用。
+        </span>
+        <form method="post" action="{% url 'view-as-stop' %}" class="ms-auto mb-0">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-primary px-3">
+                <i class="bi bi-arrow-return-left me-1"></i>返回管理员视角
+            </button>
+        </form>
+    </div>
+</div>
+{% endif %}
 <div class="site-shell {% block shell_class %}{% endblock %}">
 <nav class="navbar navbar-expand-lg site-navbar">
     <div class="container-fluid px-3 px-lg-4">
@@ -80,7 +115,7 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 {% block extra_js %}{% endblock %}
-{% if user.is_authenticated and enable_auto_sync %}
+{% if user.is_authenticated and enable_auto_sync and not request.view_as.active %}
 <script>
 (function() {
   var syncInterval = 30000;

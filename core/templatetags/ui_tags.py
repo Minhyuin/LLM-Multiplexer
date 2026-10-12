@@ -1,5 +1,7 @@
 from django import template
 
+from core.attachments import human_size
+
 
 register = template.Library()
 
@@ -38,6 +40,44 @@ def get_item(mapping, key):
 def group_emoji(group_name):
     """Return emoji for a lab group name."""
     return GROUP_EMOJI.get(group_name, "👤")
+
+
+@register.filter
+def human_filesize(value):
+    """Render a byte count as a compact, human-readable size."""
+    return human_size(value)
+
+
+_ATTACHMENT_ICONS = {
+    "application/pdf": "bi-file-earmark-pdf",
+    "application/zip": "bi-file-earmark-zip",
+    "application/x-tar": "bi-file-earmark-zip",
+    "application/gzip": "bi-file-earmark-zip",
+    "application/json": "bi-file-earmark-code",
+    "application/xml": "bi-file-earmark-code",
+    "application/msword": "bi-file-earmark-word",
+    "application/vnd.ms-excel": "bi-file-earmark-excel",
+    "application/vnd.ms-powerpoint": "bi-file-earmark-ppt",
+}
+
+
+@register.filter
+def attachment_icon(mime_type):
+    """Map a stored MIME type to a Bootstrap Icons class."""
+    mime_type = (mime_type or "").lower()
+    if mime_type in _ATTACHMENT_ICONS:
+        return _ATTACHMENT_ICONS[mime_type]
+    if mime_type.startswith("image/"):
+        return "bi-file-earmark-image"
+    if "word" in mime_type or "opendocument.text" in mime_type:
+        return "bi-file-earmark-word"
+    if "sheet" in mime_type or "excel" in mime_type:
+        return "bi-file-earmark-excel"
+    if "presentation" in mime_type or "powerpoint" in mime_type:
+        return "bi-file-earmark-ppt"
+    if mime_type.startswith("text/"):
+        return "bi-file-earmark-text"
+    return "bi-file-earmark"
 
 
 @register.filter

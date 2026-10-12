@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+
+{% block title %}只读预览{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+        <div>
+            <span class="eyebrow-badge mb-2 d-inline-flex">Read-only</span>
+            <h3 class="mb-1">只读预览下无法执行此操作</h3>
+            <p class="text-muted mb-0">
+                你正以 <strong>{{ request.view_as.target_user.username }}</strong> 的账户视角浏览（只读预览），
+                提交、同步等会修改数据的操作已被阻止。
+            </p>
+        </div>
+        <form method="post" action="{% url 'view-as-stop' %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary px-4">
+                <i class="bi bi-arrow-return-left me-1"></i>返回管理员视角
+            </button>
+        </form>
+    </div>
+</section>
+
+<div class="card panel-card"><div class="card-body">
+    <p class="text-muted mb-0">如需继续操作，请先返回管理员视角，再从用户列表重新进入他人的只读预览。</p>
+</div></div>
+{% endblock %}

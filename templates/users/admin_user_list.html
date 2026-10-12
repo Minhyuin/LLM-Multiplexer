@@ -93,6 +93,14 @@
                     <td>{{ monthly_usage|get_item:item.id|default:'0'|token_unit }}</td>
                     <td class="text-end">
                         <div class="d-inline-flex gap-1">
+                            {% if item.id != user.id and item.is_active %}
+                            <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill px-3"
+                                    formaction="/users/admin/{{ item.id }}/view-as/"
+                                    title="以该用户的账户视角只读预览"
+                                    onclick="return confirm('以 {{ item.username }} 的账户视角只读预览？')">
+                                <i class="bi bi-eye me-1"></i>视角
+                            </button>
+                            {% endif %}
                             <a class="btn btn-sm btn-soft px-3" href="/users/admin/{{ item.id }}/edit/">编辑</a>
                             {% if not item.is_staff %}
                             <form method="post" action="/users/admin/{{ item.id }}/toggle/" style="display:inline;">

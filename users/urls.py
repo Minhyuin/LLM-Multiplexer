@@ -9,5 +9,7 @@ urlpatterns = [
     path("admin/<int:user_id>/edit/", views.admin_user_edit, name="admin-user-edit"),
     path("admin/<int:user_id>/toggle/", views.admin_user_toggle, name="admin-user-toggle"),
     path("admin/<int:user_id>/delete/", views.admin_user_delete, name="admin-user-delete"),
+    path("admin/<int:user_id>/view-as/", views.admin_user_view_as_start, name="view-as-start"),
+    path("admin/view-as/stop/", views.admin_user_view_as_stop, name="view-as-stop"),
     path("admin/batch/", views.admin_user_batch, name="admin-user-batch"),
 ]

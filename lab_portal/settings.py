@@ -41,6 +41,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "users.middleware.ViewAsMiddleware",
     "core.middleware.PortalLoginRequiredMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -97,6 +98,18 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# --- Private uploads (announcement / discussion attachments) ---
+# Deliberately OUTSIDE MEDIA_ROOT: nginx serves /media/ directly (bypassing Django
+# auth), so member-only attachments must live in a separate root that is only ever
+# streamed by authenticated, permission-checked Django views.
+PRIVATE_UPLOAD_ROOT = Path(os.getenv("PRIVATE_UPLOAD_ROOT", BASE_DIR / "private_uploads"))
+PRIVATE_UPLOAD_URL = "/portal-attachments/"
+ATTACHMENT_MAX_BYTES = int(os.getenv("ATTACHMENT_MAX_BYTES", 10 * 1024 * 1024))  # per file, 10 MiB
+ATTACHMENT_MAX_BATCH_BYTES = int(os.getenv("ATTACHMENT_MAX_BATCH_BYTES", 18 * 1024 * 1024))  # per submit, 18 MiB (under nginx 20m)
+ATTACHMENT_MAX_PER_CONTENT = int(os.getenv("ATTACHMENT_MAX_PER_CONTENT", 10))  # per announcement / post
+ATTACHMENT_MAX_PIXELS = int(os.getenv("ATTACHMENT_MAX_PIXELS", 50_000_000))  # anti decompression-bomb
+ATTACHMENT_MAX_EDGE = int(os.getenv("ATTACHMENT_MAX_EDGE", 20000))  # max width/height in px
 
 LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/"

@@ -1,3 +1,3 @@
 {% extends 'base.html' %}
 {% block title %}发起讨论{% endblock %}
-{% block content %}<div class="narrow-content"><span class="eyebrow-badge">NEW TOPIC</span><h1 class="mt-2 mb-4">发起讨论</h1><form class="panel-card p-4" method="post">{% csrf_token %}{{ topic_form.as_p }}{{ post_form.as_p }}<button class="btn btn-primary" type="submit">发布讨论</button></form></div>{% endblock %}
+{% block content %}<div class="narrow-content"><span class="eyebrow-badge">NEW TOPIC</span><h1 class="mt-2 mb-4">发起讨论</h1><form class="panel-card p-4" method="post" enctype="multipart/form-data">{% csrf_token %}{{ topic_form.as_p }}{{ post_form.as_p }}<button class="btn btn-primary" type="submit">发布讨论</button></form></div>{% endblock %}

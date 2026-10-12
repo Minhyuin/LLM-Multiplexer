@@ -1,0 +1,81 @@
+/* ===== Private attachments (announcements & discussions) ===== */
+/* Flat Scandinavian palette: surfaces #faf7f3 / borders #d4cdc5 / radius 6px. */
+.attachment-list {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.attachment-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid #d4cdc5;
+    border-radius: 6px;
+    background: #faf7f3;
+    max-width: 100%;
+}
+
+.attachment-image {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.attachment-image-preview {
+    display: block;
+    width: 100%;
+    min-width: 0;
+}
+
+.attachment-image-preview img {
+    display: block;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    border-radius: 4px;
+}
+
+.attachment-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 4px;
+    background: #e8eee8;
+    color: #486454;
+    font-size: 1.5rem;
+    flex: 0 0 auto;
+}
+
+.attachment-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.attachment-name {
+    font-weight: 600;
+    word-break: break-all;
+}
+
+.attachment-size {
+    font-size: 0.8rem;
+    color: #66675f;
+}
+
+.attachment-remove {
+    margin-left: auto;
+}
+
+@media (max-width: 575.98px) {
+    .attachment-item {
+        width: 100%;
+    }
+}

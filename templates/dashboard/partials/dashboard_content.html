@@ -120,7 +120,7 @@
         <div class="card panel-card h-100"><div class="card-body">
             <h5 class="section-title">🧾 队员 Token 使用情况</h5>
             <div class="table-responsive soft-table-wrap scroll-table"><table class="table table-sm soft-table align-middle">
-                <thead><tr><th>队员</th><th>分组</th><th>最高使用模型</th><th>请求数</th><th>Token</th></tr></thead>
+                <thead><tr><th>队员</th><th>分组</th><th title="当前筛选范围内累计 Token 用量最多的模型">最高使用模型</th><th>请求数</th><th>Token</th></tr></thead>
                 <tbody>
                 {% for item in dashboard.key_rank %}
                     <tr><td>{{ item.display_name }}</td><td>{{ item.group_name }}</td><td>{{ item.top_model }}</td><td>{{ item.total_requests }}</td><td>{{ item.total_tokens|token_unit }}</td></tr>

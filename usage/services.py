@@ -15,7 +15,7 @@ import requests
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.db.models import Count, Max, Q, Sum
+from django.db.models import Count, OuterRef, Q, Subquery, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -850,11 +850,24 @@ def aggregate_dashboard(queryset, trend_bucket="day"):
         .order_by("-total_tokens")[:DASHBOARD_RANK_LIMIT]
     )
     key_rank = []
+    # "最高使用模型" is the model with the greatest summed total_tokens for that key.
+    # Max("model_name") only compared names, so a key whose busiest model sorted
+    # low (e.g. "gpt-5.4" against "zz-test") displayed the wrong model.
+    # The subquery reuses the same filtered queryset as the rest of the panel, so
+    # time/group/grade/visibility filters still apply; ties fall back to most
+    # requests, then model name ascending.
+    top_model_subquery = (
+        queryset.filter(api_key=OuterRef("api_key"))
+        .values("model_name")
+        .annotate(model_tokens=Sum("total_tokens"), model_requests=Count("id"))
+        .order_by("-model_tokens", "-model_requests", "model_name")
+        .values("model_name")[:1]
+    )
     top_keys = list(
         queryset.exclude(api_key=None)
         .filter(api_key__user__profile__is_dashboard_visible=True)
         .values("api_key", "api_key__user__username", "api_key__user__profile__display_name", "api_key__user__profile__lab_group", "api_key__user__profile__grade")
-        .annotate(total_tokens=Sum("total_tokens"), total_requests=Count("id"), top_model=Max("model_name"))
+        .annotate(total_tokens=Sum("total_tokens"), total_requests=Count("id"), top_model=Subquery(top_model_subquery))
         .order_by("-total_tokens")
     )
     for item in top_keys:

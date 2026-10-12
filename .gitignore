@@ -15,6 +15,7 @@ env/
 *.sqlite3
 staticfiles/
 media/
+private_uploads/
 
 # Environment
 .env

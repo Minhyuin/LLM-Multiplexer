@@ -1,8 +1,10 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from api_keys.models import APIKey
 from core.utils import admin_required
@@ -11,6 +13,7 @@ from django.db.models import Sum
 from users.models import Profile
 
 from users.forms import AdminProfileQuotaForm, AdminUserBoundKeyForm, AdminUserKeyOnlyForm, AdminUserPasswordForm, AdminUserWithCliproxyKeyForm, ProfileForm
+from users.middleware import get_real_user, is_portal_admin, start_view_as, stop_view_as
 
 
 @login_required
@@ -196,4 +199,43 @@ def admin_user_batch(request):
         else:
             messages.warning(request, "未知操作")
 
+    return redirect("admin-user-list")
+
+
+@admin_required
+@require_POST
+def admin_user_view_as_start(request, user_id):
+    """Enter a read-only preview of another account (administrators only).
+
+    The real authentication principal stays the administrator in the session;
+    ``users.middleware.ViewAsMiddleware`` exposes the target as the effective
+    ``request.user`` and blocks every mutating request while it is active.
+    """
+    target_user = get_object_or_404(User.objects.select_related("profile"), pk=user_id)
+    if target_user.pk == request.user.pk:
+        messages.warning(request, "无需预览自己的账户视角")
+        return redirect("admin-user-list")
+    if not target_user.is_active:
+        messages.warning(request, f"用户 {target_user.username} 已停用，无法预览其账户视角")
+        return redirect("admin-user-list")
+
+    start_view_as(request, target_user)
+    messages.success(request, f"已切换到 {target_user.username} 的只读预览视角，写操作已禁用")
+    return redirect("home")
+
+
+@require_POST
+def admin_user_view_as_stop(request):
+    """Leave view-as mode and return to the administrator perspective.
+
+    Deliberately not wrapped in ``admin_required``: while a perspective is
+    borrowed ``request.user`` is the target account, so the authorization check
+    runs against the real principal instead.  The check also works when the
+    target account was deleted, disabled or demoted mid-session.
+    """
+    if not is_portal_admin(get_real_user(request)):
+        raise PermissionDenied("需要管理员权限")
+
+    stop_view_as(request)
+    messages.success(request, "已返回管理员视角")
     return redirect("admin-user-list")

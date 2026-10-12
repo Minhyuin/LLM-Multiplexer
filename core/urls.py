@@ -18,4 +18,6 @@ urlpatterns = [
     path("discussions/<int:topic_id>/reply/", views.discussion_reply, name="discussion-reply"),
     path("discussions/posts/<int:post_id>/edit/", views.discussion_edit, name="discussion-edit"),
     path("discussions/posts/<int:post_id>/delete/", views.discussion_delete, name="discussion-delete"),
+    path("attachments/<int:attachment_id>/", views.attachment_serve, name="attachment-serve"),
+    path("attachments/<int:attachment_id>/delete/", views.attachment_delete, name="attachment-delete"),
 ]
