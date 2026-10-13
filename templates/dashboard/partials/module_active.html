@@ -1,0 +1,16 @@
+{% load ui_tags %}
+        <div class="card panel-card h-100"><div class="card-body">
+            <h5 class="section-title">管理视角补充信息</h5>
+            <p class="text-muted mb-3">管理员面板展示完整队内统计，普通成员面板仅保留与个人相关的公开视图和受控排行榜。</p>
+            <div class="table-responsive soft-table-wrap scroll-table"><table class="table table-sm soft-table align-middle">
+                <thead><tr><th>队员</th><th>最近累计 Token</th></tr></thead>
+                <tbody>
+                {% for item in dashboard.recent_active_users %}
+                    <tr><td>{{ item.display_name|default:'未设置显示名' }}</td><td>{{ item.last_time|token_unit }}</td></tr>
+                {% empty %}
+                    <tr><td colspan="2" class="text-center text-muted">暂无数据</td></tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+        </div></div>
+    </div>

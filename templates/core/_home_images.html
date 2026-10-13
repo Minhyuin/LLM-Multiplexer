@@ -1,0 +1,9 @@
+{% if images %}
+<div class="home-content-images" aria-label="内容图片">
+    {% for image in images %}
+    <a href="{% url 'attachment-serve' image.pk %}" target="_blank" rel="noopener" aria-label="查看原图：{{ image.original_name }}">
+        <img src="{% url 'attachment-serve' image.pk %}" alt="{{ image.original_name }}"{% if image.width and image.height %} width="{{ image.width }}" height="{{ image.height }}"{% endif %} loading="lazy" decoding="async">
+    </a>
+    {% endfor %}
+</div>
+{% endif %}

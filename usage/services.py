@@ -15,7 +15,9 @@ import requests
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.db.models import Count, OuterRef, Q, Subquery, Sum
+from django.db import DatabaseError, NotSupportedError, connection, connections, transaction
+from django.db.models import BooleanField, Count, F, Func, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models.functions import TruncDate, TruncHour, TruncMonth
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -30,6 +32,11 @@ SYNC_LOCK = threading.Lock()
 LAST_SYNC_AT = 0.0
 SYNC_INTERVAL_SECONDS = 60
 DASHBOARD_RANK_LIMIT = 8
+# Dashboard panels, in the order aggregate_dashboard() has always returned them.
+# ``sections=None`` computes every panel.
+DASHBOARD_SECTIONS = ("summary", "models", "users", "keys", "trend", "errors", "active")
+DASHBOARD_KEY_PAGE_SIZE_DEFAULT = 25
+DASHBOARD_KEY_PAGE_SIZE_LIMIT = 50
 
 DEFAULT_MODEL_PRICING = {
     "gpt-5.4": (Decimal("2.50"), Decimal("15.00"), Decimal("0.25")),
@@ -819,74 +826,514 @@ def _trend_label(request_time, trend_bucket):
     local_time = timezone.localtime(request_time)
     if trend_bucket == "hour":
         return local_time.replace(minute=0, second=0, microsecond=0).strftime("%H:%M")
+    if trend_bucket == "month":
+        return local_time.strftime("%Y-%m")
     return local_time.date().isoformat()
 
 
-def aggregate_dashboard(queryset, trend_bucket="day"):
-    total_requests = queryset.count()
-    summary = queryset.aggregate(total_tokens=Sum("total_tokens"), total_cost=Sum("estimated_cost"), error_count=Count("id", filter=Q(is_error=True)))
-    total_tokens = summary["total_tokens"] or 0
-    total_cost = summary["total_cost"] or Decimal("0")
-    error_count = summary["error_count"] or 0
-    error_rate = round((error_count / total_requests) * 100, 2) if total_requests else 0
-    active_users = queryset.exclude(user=None).values("user").distinct().count()
-    active_keys = queryset.exclude(api_key=None).values("api_key").distinct().count()
+def _trend_trunc_function(trend_bucket):
+    """DB truncation for a trend bucket; unknown buckets keep the legacy day view."""
+    if trend_bucket == "hour":
+        return TruncHour
+    if trend_bucket == "month":
+        return TruncMonth
+    return TruncDate
+
+
+def _local_bucket_time(bucket):
+    if timezone.is_aware(bucket):
+        return timezone.localtime(bucket)
+    return bucket
+
+
+def _bucket_label(bucket, trend_bucket):
+    """Label for a truncated DB bucket, matching ``_trend_label``."""
+    if bucket is None:
+        return None
+    if trend_bucket == "hour":
+        return _local_bucket_time(bucket).strftime("%H:%M")
+    if trend_bucket == "month":
+        return _local_bucket_time(bucket).strftime("%Y-%m")
+    return bucket.isoformat() if hasattr(bucket, "isoformat") else str(bucket)
+
+
+# raw_payload token layouts in the legacy precedence order: the first path that
+# holds a usable integer wins, later paths are only consulted when it does not.
+CACHED_TOKEN_PATHS = (
+    ("raw_payload", "tokens", "cached_tokens"),
+    ("tokens", "cached_tokens"),
+    ("cached_tokens",),
+    ("usage", "cached_tokens"),
+)
+THINKING_TOKEN_PATHS = (
+    ("raw_payload", "tokens", "reasoning_tokens"),
+    ("raw_payload", "tokens", "thinking_tokens"),
+    ("tokens", "thinking_tokens"),
+    ("tokens", "reasoning_tokens"),
+    ("thinking_tokens",),
+    ("reasoning_tokens",),
+    ("usage", "thinking_tokens"),
+    ("usage", "reasoning_tokens"),
+    ("completion_tokens_details", "reasoning_tokens"),
+)
+
+_DB_TOKEN_VENDORS = ("sqlite", "postgresql")
+# JSON path keys are interpolated into a JSON path / SQL string literal, so keys
+# that would need escaping are rejected (the legacy payload layouts never need it).
+_PATH_KEY_FORBIDDEN = ('"', "\\")
+# Python's int() accepts literals of any length; SQL integer arithmetic does not,
+# so digit runs longer than 18 characters are left to the Python fallback.
+_INT_LITERAL_MAX_DIGITS = 18
+# Boundary used to decide that a JSON *number* still casts exactly the way
+# int() would; anything beyond it goes to the Python fallback.
+_INT_LITERAL_BOUND_SQL = "1e18"
+
+
+def _valid_json_path_key(key):
+    return bool(key) and not any(char in key for char in _PATH_KEY_FORBIDDEN)
+
+
+def _json_path_sql(vendor, column_sql, path):
+    """(value, json type, text form) SQL for one JSON path.
+
+    ``column_sql`` is the compiled column reference (``"usage_usagelog"."raw_payload"``),
+    ``path`` a tuple of object keys.
+    """
+    if not path or any(not _valid_json_path_key(key) for key in path):
+        raise ValueError(f"unsupported JSON path: {path!r}")
+    if vendor == "sqlite":
+        json_path = "$" + "".join(f'."{key}"' for key in path)
+        value_sql = f"JSON_EXTRACT({column_sql}, '{json_path}')"
+        # json_extract() already yields SQL text for JSON strings and SQL numbers
+        # for JSON numbers, so the value doubles as its own text form.
+        return value_sql, f"TYPEOF({value_sql})", value_sql
+    if vendor == "postgresql":
+        array_path = "{" + ",".join(f'"{key}"' for key in path) + "}"
+        value_sql = f"({column_sql} #> '{array_path}')"
+        return value_sql, f"JSONB_TYPEOF({value_sql})", f"({column_sql} #>> '{array_path}')"
+    raise NotSupportedError(f"no safe JSON int expression for database vendor {vendor!r}")
+
+
+def _json_int_path_sql(vendor, column_sql, path):
+    """Row-level (value SQL, SQL-inexpressible SQL) for one JSON path.
+
+    ``value SQL`` reproduces ``_payload_int`` for one path: JSON null, missing
+    keys, empty strings, objects and arrays yield NULL, JSON true/false yield
+    1/0 (as ``int(True)``/``int(False)``), JSON numbers are truncated towards
+    zero (as ``int(3.7)`` == 3) and JSON strings must be integer literals in the
+    ``int()`` grammar (ASCII whitespace, optional sign, PEP 515 underscores
+    between digits) -- so ``"3.7"`` is NULL, exactly like ``int("3.7")`` raises.
+
+    ``SQL-inexpressible SQL`` is true for the rows only Python can interpret
+    correctly (Unicode digits or whitespace, 19+ digit integers, numbers outside
+    the int64 range); those rows are aggregated by the Python fallback instead.
+    """
+    value_sql, type_sql, text_sql = _json_path_sql(vendor, column_sql, path)
+    if vendor == "sqlite":
+        trimmed = f"TRIM({text_sql}, char(9) || char(10) || char(13) || ' ')"
+        # The sign is stripped so the digit/underscore rules are checked on the
+        # magnitude alone, then re-attached: int("-9") is negative, and casting the
+        # sign-less digits on their own silently turned "-9" into 9.
+        sign = f"CASE WHEN SUBSTR({trimmed}, 1, 1) = '-' THEN '-' ELSE '' END"
+        body = f"CASE WHEN SUBSTR({trimmed}, 1, 1) IN ('+', '-') THEN SUBSTR({trimmed}, 2) ELSE {trimmed} END"
+        digits = f"REPLACE({body}, '_', '')"
+        signed = f"({sign} || {digits})"
+        in_number_range = f"{value_sql} BETWEEN -{_INT_LITERAL_BOUND_SQL} AND {_INT_LITERAL_BOUND_SQL}"
+        literal_ok = (
+            f"({body} NOT GLOB '_*' AND {body} NOT GLOB '*_' AND {body} NOT GLOB '*__*'"
+            f" AND LENGTH({digits}) BETWEEN 1 AND {_INT_LITERAL_MAX_DIGITS}"
+            f" AND {digits} NOT GLOB '*[^0-9]*')"
+        )
+        # The casts live in their own CASE branch so that the literal rules and the
+        # numeric range are validated before any conversion happens.
+        value_expr = (
+            "CASE"
+            f" WHEN {value_sql} IS NULL THEN NULL"
+            f" WHEN {type_sql} = 'integer' THEN {value_sql}"
+            f" WHEN {type_sql} = 'real' THEN CASE WHEN {in_number_range}"
+            f" THEN CAST({value_sql} AS INTEGER) ELSE NULL END"
+            f" WHEN {type_sql} = 'text' THEN CASE WHEN {literal_ok}"
+            f" THEN CAST({signed} AS INTEGER) ELSE NULL END"
+            " ELSE NULL END"
+        )
+        inexpressible = (
+            f"({value_sql} IS NOT NULL AND {text_sql} <> '' AND (CASE {type_sql}"
+            f" WHEN 'text' THEN NOT {literal_ok}"
+            f" WHEN 'real' THEN NOT ({in_number_range}) ELSE 0 END))"
+        )
+        return value_expr, inexpressible
+    if vendor == "postgresql":
+        trimmed = f"BTRIM({text_sql}, E' \\t\\n\\r')"
+        # Same sign handling as the SQLite branch: int("-9") is negative.
+        sign = f"CASE WHEN SUBSTR({trimmed}, 1, 1) = '-' THEN '-' ELSE '' END"
+        body = f"CASE WHEN SUBSTR({trimmed}, 1, 1) IN ('+', '-') THEN SUBSTR({trimmed}, 2) ELSE {trimmed} END"
+        digits = f"REPLACE({body}, '_', '')"
+        signed = f"({sign} || {digits})"
+        numeric = f"{text_sql}::numeric"
+        literal_ok = (
+            f"({body} !~ '^_' AND {body} !~ '_$' AND {body} !~ '__'"
+            f" AND {digits} ~ '^[0-9]{{1,{_INT_LITERAL_MAX_DIGITS}}}$')"
+        )
+        in_range = f"{numeric} BETWEEN -{_INT_LITERAL_BOUND_SQL} AND {_INT_LITERAL_BOUND_SQL}"
+        # PostgreSQL does not promise to short-circuit a flat AND chain, so a cast of
+        # a non-numeric string could be evaluated for an unrelated row and abort the
+        # query (silently degrading to the Python scan). Each cast therefore sits in
+        # its own CASE branch, which is only evaluated after the type test matched.
+        value_expr = (
+            "CASE"
+            f" WHEN {type_sql} = 'null' THEN NULL"
+            f" WHEN {type_sql} = 'boolean' THEN CASE WHEN {text_sql} = 'true' THEN 1 ELSE 0 END"
+            f" WHEN {type_sql} = 'number' THEN CASE WHEN {in_range}"
+            f" THEN TRUNC({numeric})::bigint ELSE NULL END"
+            f" WHEN {type_sql} = 'string' THEN CASE WHEN {literal_ok}"
+            f" THEN ({signed})::bigint ELSE NULL END"
+            " ELSE NULL END"
+        )
+        inexpressible = (
+            f"({value_sql} IS NOT NULL AND {text_sql} <> '' AND (CASE {type_sql}"
+            f" WHEN 'string' THEN NOT {literal_ok}"
+            f" WHEN 'number' THEN NOT ({in_range}) ELSE FALSE END))"
+        )
+        return value_expr, inexpressible
+    raise NotSupportedError(f"no safe JSON int expression for database vendor {vendor!r}")
+
+
+def _build_safe_json_int_sql(vendor, column_sql, paths):
+    """COALESCE over ``paths``: the legacy first-usable-int with a 0 fallback."""
+    return "COALESCE(" + ", ".join(_json_int_path_sql(vendor, column_sql, path)[0] for path in paths) + ", 0)"
+
+
+def _build_json_token_anomaly_sql(vendor, column_sql, paths):
+    """Rows holding a token value that only Python's int() can interpret."""
+    conditions = [_json_int_path_sql(vendor, column_sql, path)[1] for path in paths]
+    return "(" + " OR ".join(conditions) + ")"
+
+
+class _SafeJsonInt(Func):
+    """Row-level safe int for the first usable value among ``paths``."""
+
+    def __init__(self, paths, source="raw_payload", **kwargs):
+        super().__init__(F(source), output_field=IntegerField(), **kwargs)
+        self.token_paths = tuple(tuple(path) for path in paths)
+
+    def as_sql(self, compiler, connection):
+        column_sql, params = compiler.compile(self.source_expressions[0])
+        return _build_safe_json_int_sql(connection.vendor, column_sql, self.token_paths), params
+
+
+class _JsonTokenAnomaly(Func):
+    """Boolean row expression: SQL cannot reproduce ``int()`` for this row."""
+
+    filterable = True
+
+    def __init__(self, paths, source="raw_payload", **kwargs):
+        kwargs.setdefault("output_field", BooleanField())
+        super().__init__(F(source), **kwargs)
+        self.token_paths = tuple(tuple(path) for path in paths)
+
+    def as_sql(self, compiler, connection):
+        column_sql, params = compiler.compile(self.source_expressions[0])
+        return _build_json_token_anomaly_sql(connection.vendor, column_sql, self.token_paths), params
+
+
+def _token_totals_from_payload_scan(queryset, trend_bucket):
+    """Legacy fallback: parse raw_payload row by row (unchanged semantics)."""
+    totals = {}
+    for row in queryset.only("request_time", "raw_payload").iterator(chunk_size=500):
+        cached_tokens = _payload_int(row.raw_payload, *CACHED_TOKEN_PATHS)
+        thinking_tokens = _payload_int(row.raw_payload, *THINKING_TOKEN_PATHS)
+        if cached_tokens or thinking_tokens:
+            label = _trend_label(row.request_time, trend_bucket)
+            bucket = totals.setdefault(label, {"cached_tokens": 0, "thinking_tokens": 0})
+            bucket["cached_tokens"] += cached_tokens
+            bucket["thinking_tokens"] += thinking_tokens
+    return totals
+
+
+def _token_totals_by_label(queryset, trend_bucket):
+    """{label: {"cached_tokens": n, "thinking_tokens": n}} from the database.
+
+    Cached/thinking tokens are aggregated in SQL with an expression that mirrors
+    ``_payload_int`` path precedence, so the whole payload column is never
+    shipped to Python. Rows the SQL expression cannot represent exactly are
+    fetched on their own and corrected in Python. Databases without a verified
+    expression -- and any failure of the aggregate -- fall back to the legacy
+    row-by-row scan.
+    """
+    vendor = connections[queryset.db].vendor if queryset.db else connection.vendor
+    if vendor not in _DB_TOKEN_VENDORS:
+        return _token_totals_from_payload_scan(queryset, trend_bucket)
+    totals = {}
+    try:
+        with transaction.atomic(using=queryset.db):
+            anomaly = _JsonTokenAnomaly(CACHED_TOKEN_PATHS + THINKING_TOKEN_PATHS)
+            rows = (
+                queryset.exclude(anomaly)
+                .annotate(bucket=_trend_trunc_function(trend_bucket)("request_time"))
+                .values("bucket")
+                .annotate(
+                    cached_tokens=Sum(_SafeJsonInt(CACHED_TOKEN_PATHS)),
+                    thinking_tokens=Sum(_SafeJsonInt(THINKING_TOKEN_PATHS)),
+                )
+                .order_by("bucket")
+            )
+            for row in rows:
+                label = _bucket_label(row["bucket"], trend_bucket)
+                if label is None:
+                    continue
+                bucket = totals.setdefault(label, {"cached_tokens": 0, "thinking_tokens": 0})
+                bucket["cached_tokens"] += int(row["cached_tokens"] or 0)
+                bucket["thinking_tokens"] += int(row["thinking_tokens"] or 0)
+            # Only the rows the expression cannot represent are streamed to Python
+            # (usually none), so a malformed payload never materialises the column.
+            for row in (
+                queryset.filter(anomaly).only("request_time", "raw_payload").iterator(chunk_size=500)
+            ):
+                label = _trend_label(row.request_time, trend_bucket)
+                bucket = totals.setdefault(label, {"cached_tokens": 0, "thinking_tokens": 0})
+                bucket["cached_tokens"] += _payload_int(row.raw_payload, *CACHED_TOKEN_PATHS)
+                bucket["thinking_tokens"] += _payload_int(row.raw_payload, *THINKING_TOKEN_PATHS)
+            return totals
+    except NotSupportedError:
+        logger.warning("no JSON token aggregate for vendor %s; scanning raw_payload", vendor)
+    except DatabaseError:
+        logger.warning("JSON token aggregate failed on %s; scanning raw_payload", vendor, exc_info=True)
+    return _token_totals_from_payload_scan(queryset, trend_bucket)
+
+
+def _dashboard_summary_section(queryset):
+    summary = queryset.aggregate(
+        total_requests=Count("id"),
+        total_tokens=Sum("total_tokens"),
+        total_cost=Sum("estimated_cost"),
+        error_count=Count("id", filter=Q(is_error=True)),
+        active_users=Count("user", distinct=True),
+        active_keys=Count("api_key", distinct=True),
+    )
+    total_requests = summary["total_requests"] or 0
+    return {
+        "total_requests": total_requests,
+        "total_tokens": summary["total_tokens"] or 0,
+        "total_cost": summary["total_cost"] or 0,
+        "error_rate": round((summary["error_count"] / total_requests) * 100, 2) if total_requests else 0,
+        "active_users": summary["active_users"] or 0,
+        "active_keys": summary["active_keys"] or 0,
+    }
+
+
+# The legacy panels ranked ten models (the user and key panels ranked eight), and
+# the dashboard templates read ``total_errors``/``total_tokens``, so the model
+# panels keep the legacy row shape and slice exactly.
+DASHBOARD_MODEL_RANK_LIMIT = 10
+
+
+def _dashboard_models_section(queryset):
     model_rank = list(
         queryset.values("model_name")
         .annotate(total_requests=Count("id"), total_tokens=Sum("total_tokens"))
-        .order_by("-total_tokens", "-total_requests")[:10]
+        .order_by("-total_tokens", "-total_requests")[:DASHBOARD_MODEL_RANK_LIMIT]
     )
     error_model_rank = list(
         queryset.filter(is_error=True)
         .values("model_name")
         .annotate(total_errors=Count("id"), total_tokens=Sum("total_tokens"))
-        .order_by("-total_errors", "-total_tokens")[:10]
+        .order_by("-total_errors", "-total_tokens")[:DASHBOARD_MODEL_RANK_LIMIT]
     )
-    user_rank = list(
+    return {"model_rank": model_rank, "error_model_rank": error_model_rank}
+
+
+def _dashboard_user_rank(queryset):
+    """Raw ``values()`` rows, exactly as the legacy panel returned them.
+
+    The values keys are load-bearing: ``dashboard.views._enrich_display_names``
+    reads ``user__username``/``user__profile__display_name`` and writes the
+    ``display_name`` it shows, so pre-formatting the rows here would break the
+    template for every name it has to fill in.
+    """
+    return list(
         queryset.exclude(user=None)
         .filter(user__profile__is_dashboard_visible=True)
-        .values("user", "user__username", "user__profile__display_name", "user__profile__lab_group", "user__profile__grade")
+        .values(
+            "user",
+            "user__username",
+            "user__profile__display_name",
+            "user__profile__lab_group",
+            "user__profile__grade",
+        )
         .annotate(total_tokens=Sum("total_tokens"))
         .order_by("-total_tokens")[:DASHBOARD_RANK_LIMIT]
     )
-    key_rank = []
-    # "最高使用模型" is the model with the greatest summed total_tokens for that key.
-    # Max("model_name") only compared names, so a key whose busiest model sorted
-    # low (e.g. "gpt-5.4" against "zz-test") displayed the wrong model.
-    # The subquery reuses the same filtered queryset as the rest of the panel, so
-    # time/group/grade/visibility filters still apply; ties fall back to most
-    # requests, then model name ascending.
-    top_model_subquery = (
+
+
+def _key_rank_queryset(queryset):
+    """Per-key totals for the keys the dashboard may show."""
+    return (
+        queryset.exclude(api_key=None)
+        .filter(api_key__user__profile__is_dashboard_visible=True)
+        .values(
+            "api_key",
+            "api_key__user__username",
+            "api_key__user__profile__display_name",
+            "api_key__user__profile__lab_group",
+            "api_key__user__profile__grade",
+        )
+        .annotate(total_tokens=Sum("total_tokens"), total_requests=Count("id"))
+    )
+
+
+def _top_model_subquery(queryset):
+    """Highest-token model of a key, as a correlated subquery.
+
+    The legacy panel used ``Max("model_name")``, which compares names instead of
+    token totals, so a key whose busiest model sorted low (for example "gpt-5.4"
+    against "zz-test") displayed the wrong top model. The subquery reuses the
+    dashboard queryset, so time/group/grade/visibility filters still apply, and
+    ties fall back to most requests, then model name ascending.
+    """
+    return (
         queryset.filter(api_key=OuterRef("api_key"))
         .values("model_name")
         .annotate(model_tokens=Sum("total_tokens"), model_requests=Count("id"))
         .order_by("-model_tokens", "-model_requests", "model_name")
         .values("model_name")[:1]
     )
-    top_keys = list(
-        queryset.exclude(api_key=None)
-        .filter(api_key__user__profile__is_dashboard_visible=True)
-        .values("api_key", "api_key__user__username", "api_key__user__profile__display_name", "api_key__user__profile__lab_group", "api_key__user__profile__grade")
-        .annotate(total_tokens=Sum("total_tokens"), total_requests=Count("id"), top_model=Subquery(top_model_subquery))
-        .order_by("-total_tokens")
-    )
-    for item in top_keys:
-        key_rank.append(
-            {
-                "display_name": _preferred_display_name(item["api_key__user__profile__display_name"], item["api_key__user__username"]),
-                "group_name": item["api_key__user__profile__lab_group"] or "未分组",
-                "grade": item["api_key__user__profile__grade"] or "未设置",
-                "top_model": item["top_model"],
-                "total_tokens": item["total_tokens"],
-                "total_requests": item["total_requests"],
-            }
+
+
+def _key_rank_rows(items):
+    return [
+        {
+            "display_name": _preferred_display_name(
+                item["api_key__user__profile__display_name"], item["api_key__user__username"]
+            ),
+            "group_name": item["api_key__user__profile__lab_group"] or "未分组",
+            "grade": item["api_key__user__profile__grade"] or "未设置",
+            "top_model": item["top_model"],
+            "total_tokens": item["total_tokens"],
+            "total_requests": item["total_requests"],
+        }
+        for item in items
+    ]
+
+
+def _coerce_dashboard_page_int(value, name):
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise ValueError(f"{name} 必须是整数")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} 必须是整数") from None
+
+
+def _dashboard_key_page_window(total, key_page, key_page_size):
+    """(offset, limit, metadata) for key_rank pagination, following Django's Paginator."""
+    page_size = max(1, min(_coerce_dashboard_page_int(key_page_size, "key_page_size"), DASHBOARD_KEY_PAGE_SIZE_LIMIT))
+    num_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    page = max(1, min(_coerce_dashboard_page_int(key_page, "key_page"), num_pages))
+    metadata = {
+        "page": page,
+        "num_pages": num_pages,
+        "total": total,
+        "has_next": page < num_pages,
+        "has_previous": page > 1,
+    }
+    return (page - 1) * page_size, page_size, metadata
+
+
+def _dashboard_key_section(queryset, key_page, key_page_size):
+    if key_page is None:
+        items = (
+            _key_rank_queryset(queryset)
+            .annotate(top_model=Subquery(_top_model_subquery(queryset)))
+            .order_by("-total_tokens")
         )
-    # Use DB-level aggregation for trend data to avoid loading all rows into memory
-    from django.db.models.functions import TruncHour, TruncDate
-    trunc_fn = TruncHour if trend_bucket == "hour" else TruncDate
-    trend_qs = (
-        queryset
-        .annotate(bucket=trunc_fn("request_time"))
+        return {"key_rank": _key_rank_rows(items)}
+    # Paginate over the plain grouped query and only then attach the correlated
+    # top-model subquery, so the expensive part runs for one page, not for every key.
+    # ``api_key_id`` and not ``api_key``: ordering by a relation name follows the
+    # related model's Meta.ordering instead of the foreign key column, which made
+    # the tiebreak depend on APIKey's default ordering rather than on the key id.
+    page_queryset = _key_rank_queryset(queryset).order_by("-total_tokens", "api_key_id")
+    offset, limit, metadata = _dashboard_key_page_window(page_queryset.count(), key_page, key_page_size)
+    items = page_queryset.annotate(top_model=Subquery(_top_model_subquery(queryset)))[offset:offset + limit]
+    return {"key_rank": _key_rank_rows(items), "key_pagination": metadata}
+
+
+def _dashboard_recent_errors(queryset):
+    return list(
+        queryset.filter(is_error=True)
+        .exclude(user=None)
+        .select_related("user", "api_key", "user__profile")
+        .order_by("-request_time")[:30]
+    )
+
+
+def _dashboard_recent_active_users(queryset):
+    return list(
+        queryset.exclude(user=None)
+        .values("user__username", "user__profile__display_name")
+        .annotate(last_time=Sum("total_tokens"))
+        .order_by("-last_time")[:10]
+    )
+
+
+def _normalize_dashboard_sections(sections):
+    if sections is None:
+        return DASHBOARD_SECTIONS
+    if isinstance(sections, str):
+        raise TypeError("sections 必须是可迭代的栏目名集合，而不是单个字符串")
+    requested = set(sections)
+    unknown = requested.difference(DASHBOARD_SECTIONS)
+    if unknown:
+        raise ValueError(
+            "未知的看板栏目: " + ", ".join(sorted(str(name) for name in unknown))
+            + "; 可用栏目: " + ", ".join(DASHBOARD_SECTIONS)
+        )
+    return tuple(name for name in DASHBOARD_SECTIONS if name in requested)
+
+
+def aggregate_dashboard(queryset, trend_bucket="day", *, sections=None, key_page=None,
+                        key_page_size=DASHBOARD_KEY_PAGE_SIZE_DEFAULT):
+    """聚合看板数据。
+
+    ``sections=None`` 按旧版顺序返回全部栏目；传入栏目名集合时只计算所请求的栏目
+    （可用栏目见 ``DASHBOARD_SECTIONS``），未知栏目名会抛出 ``ValueError``。汇总栏目
+    的计数与排名共用一次聚合查询，因此默认路径的查询次数也比旧版更少。
+
+    ``key_page`` 传入页码时，``key_rank`` 按 ``-total_tokens, api_key`` 稳定排序并
+    分页，同时返回 ``key_pagination``；``key_page_size`` 会被夹在
+    ``1..DASHBOARD_KEY_PAGE_SIZE_LIMIT`` 之间。
+
+    ``trend_bucket`` 支持 ``hour``、``day``（默认）与 ``month``（``YYYY-MM`` 标签，
+    ``TruncMonth``），其它取值保持旧版的按天行为。
+
+    cached/thinking tokens 仍按 ``raw_payload``/``_payload_int`` 的路径优先级取值，
+    但由数据库聚合完成；数据库无法精确表达的行（Unicode 数字、超长整数等）改用
+    Python 逐行修正。数据库不支持或聚合失败时，回退到旧版整表扫描。
+    """
+    data = {}
+    for name in _normalize_dashboard_sections(sections):
+        if name == "summary":
+            data.update(_dashboard_summary_section(queryset))
+        elif name == "models":
+            data.update(_dashboard_models_section(queryset))
+        elif name == "users":
+            data["user_rank"] = _dashboard_user_rank(queryset)
+        elif name == "keys":
+            data.update(_dashboard_key_section(queryset, key_page, key_page_size))
+        elif name == "trend":
+            data["trend"] = _dashboard_trend_section(queryset, trend_bucket)
+        elif name == "errors":
+            data["recent_errors"] = _dashboard_recent_errors(queryset)
+        elif name == "active":
+            data["recent_active_users"] = _dashboard_recent_active_users(queryset)
+    return data
+
+
+def _dashboard_trend_section(queryset, trend_bucket):
+    """Trend series: DB-grouped counters merged with cached/thinking token totals."""
+    trend_map = {}
+    rows = (
+        queryset.annotate(bucket=_trend_trunc_function(trend_bucket)("request_time"))
         .values("bucket")
         .annotate(
             tokens=Sum("total_tokens"),
@@ -897,68 +1344,29 @@ def aggregate_dashboard(queryset, trend_bucket="day"):
         )
         .order_by("bucket")
     )
-    # For cached/thinking tokens we still need raw_payload parsing on a limited set
-    trend_map = defaultdict(lambda: {"tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "thinking_tokens": 0, "requests": 0, "errors": 0})
-    for row in trend_qs:
-        if row["bucket"] is None:
+    for row in rows:
+        label = _bucket_label(row["bucket"], trend_bucket)
+        if label is None:
             continue
-        bucket = row["bucket"]
-        if trend_bucket == "hour":
-            local_time = timezone.localtime(bucket)
-            label = local_time.strftime("%H:%M")
-        else:
-            # TruncDate returns a date object, not datetime
-            label = bucket.isoformat() if hasattr(bucket, 'isoformat') else str(bucket)
-        trend_map[label]["tokens"] += row["tokens"] or 0
-        trend_map[label]["prompt_tokens"] += row["prompt_tokens"] or 0
-        trend_map[label]["completion_tokens"] += row["completion_tokens"] or 0
-        trend_map[label]["requests"] += row["requests"] or 0
-        trend_map[label]["errors"] += row["errors"] or 0
-
-    # Parse cached/thinking tokens from raw_payload (only fetch needed fields)
-    for row in queryset.only("request_time", "raw_payload").iterator(chunk_size=500):
-        label = _trend_label(row.request_time, trend_bucket)
-        cached_tokens = _payload_int(row.raw_payload, ("raw_payload", "tokens", "cached_tokens"), ("tokens", "cached_tokens"), ("cached_tokens",), ("usage", "cached_tokens"))
-        thinking_tokens = _payload_int(
-            row.raw_payload,
-            ("raw_payload", "tokens", "reasoning_tokens"),
-            ("raw_payload", "tokens", "thinking_tokens"),
-            ("tokens", "thinking_tokens"),
-            ("tokens", "reasoning_tokens"),
-            ("thinking_tokens",),
-            ("reasoning_tokens",),
-            ("usage", "thinking_tokens"),
-            ("usage", "reasoning_tokens"),
-            ("completion_tokens_details", "reasoning_tokens"),
-        )
-        if cached_tokens or thinking_tokens:
-            trend_map[label]["cached_tokens"] += cached_tokens
-            trend_map[label]["thinking_tokens"] += thinking_tokens
-
-    trend = [{"date": label, **values, "error_rate": round((values['errors'] / values['requests']) * 100, 2) if values['requests'] else 0} for label, values in trend_map.items()]
-    recent_errors = list(
-        queryset.filter(is_error=True)
-        .exclude(user=None)
-        .select_related("user", "api_key", "user__profile")[:30]
-    )
-    recent_active_users = list(
-        queryset.exclude(user=None)
-        .values("user__username", "user__profile__display_name")
-        .annotate(last_time=Sum("total_tokens"))
-        .order_by("-last_time")[:10]
-    )
-    return {
-        "total_requests": total_requests,
-        "total_tokens": total_tokens,
-        "total_cost": total_cost,
-        "error_rate": error_rate,
-        "active_users": active_users,
-        "active_keys": active_keys,
-        "model_rank": model_rank,
-        "error_model_rank": error_model_rank,
-        "user_rank": user_rank,
-        "key_rank": key_rank,
-        "trend": trend,
-        "recent_errors": recent_errors,
-        "recent_active_users": recent_active_users,
-    }
+        trend_map[label] = {
+            "tokens": row["tokens"] or 0,
+            "prompt_tokens": row["prompt_tokens"] or 0,
+            "completion_tokens": row["completion_tokens"] or 0,
+            "cached_tokens": 0,
+            "thinking_tokens": 0,
+            "requests": row["requests"] or 0,
+            "errors": row["errors"] or 0,
+        }
+    for label, values in _token_totals_by_label(queryset, trend_bucket).items():
+        bucket = trend_map.get(label)
+        if bucket is not None:
+            bucket["cached_tokens"] += values["cached_tokens"]
+            bucket["thinking_tokens"] += values["thinking_tokens"]
+    return [
+        {
+            "date": label,
+            **values,
+            "error_rate": round((values["errors"] / values["requests"]) * 100, 2) if values["requests"] else 0,
+        }
+        for label, values in trend_map.items()
+    ]

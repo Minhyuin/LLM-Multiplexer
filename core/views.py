@@ -3,7 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, F, Prefetch
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -55,8 +55,18 @@ def _detail_context(request, topic, form=None):
 @login_required
 @require_http_methods(["GET", "HEAD"])
 def home(request):
-    announcements = Announcement.objects.filter(is_published=True).order_by("-created_at", "-pk")[:5]
-    return render(request, "core/home.html", {"announcements": announcements, "discussion_topics": _topics()[:8], "portal_version": portal_release_version()})
+    images = Attachment.objects.filter(kind=Attachment.KIND_IMAGE, mime_type__startswith="image/")
+    announcements = Announcement.objects.filter(is_published=True).prefetch_related(
+        Prefetch("attachments", queryset=images, to_attr="home_images")
+    ).order_by("-created_at", "-pk")[:5]
+    topics = list(_topics()[:8])
+    images_by_topic = {topic.pk: [] for topic in topics}
+    # Fetch images from both opening posts and replies without loading every post.
+    for image in images.filter(post__topic_id__in=images_by_topic).annotate(home_topic_id=F("post__topic_id")):
+        images_by_topic[image.home_topic_id].append(image)
+    for topic in topics:
+        topic.home_images = images_by_topic[topic.pk]
+    return render(request, "core/home.html", {"announcements": announcements, "discussion_topics": topics, "portal_version": portal_release_version()})
 
 
 @login_required

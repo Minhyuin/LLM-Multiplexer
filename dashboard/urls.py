@@ -3,6 +3,8 @@ from django.urls import path
 from dashboard import views
 
 urlpatterns = [
+    path("public/modules/<str:module>/", views.public_dashboard_module, name="public-dashboard-module"),
+    path("admin/modules/<str:module>/", views.admin_dashboard_module, name="admin-dashboard-module"),
     path("public/", views.public_dashboard, name="public-dashboard"),
     path("admin/", views.admin_dashboard, name="admin-dashboard"),
     path("admin/pricing/", views.model_pricing_admin, name="admin-model-pricing"),

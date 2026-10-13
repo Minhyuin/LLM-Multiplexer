@@ -1,0 +1,36 @@
+{% load ui_tags %}
+        <div class="card panel-card chart-card h-100"><div class="card-body">
+            <h5 class="section-title">🪪 我的使用概览</h5>
+            <div class="personal-summary-stack">
+                <div class="personal-summary-row">
+                    <div class="personal-summary-item">
+                        <span>我的 Token 消耗</span>
+                        <strong>{{ personal_summary.total_tokens|token_unit }}</strong>
+                    </div>
+                    <div class="personal-summary-item">
+                        <span>使用模型数</span>
+                        <strong>{{ personal_summary.model_count }}</strong>
+                    </div>
+                </div>
+                <div class="personal-summary-item">
+                    <span>当前排名</span>
+                    <strong>第 {{ personal_summary.rank }} 名 / 共 {{ personal_summary.total_users }} 人</strong>
+                </div>
+                <div class="personal-summary-item">
+                    <span>最常用模型</span>
+                    <strong>{{ personal_summary.top_model }}</strong>
+                </div>
+            </div>
+            <div class="dashboard-model-usage mt-3">
+                <span class="dashboard-model-usage-label">我的模型用量</span>
+                <div style="max-width: 360px; margin: 12px auto;"><canvas id="personalModelPieChart" height="160" role="img" aria-label="我的模型 Token 用量占比"></canvas></div>
+                <div class="model-chip-group mt-2">
+                    {% for item in personal_summary.models %}
+                        <span class="model-chip">{{ item.model_name }} · {{ item.total_tokens|token_unit }}</span>
+                    {% empty %}
+                        <span class="text-muted">暂无数据</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div></div>
+{{ personal_summary.models|json_script:"personal-model-data" }}

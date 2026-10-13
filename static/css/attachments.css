@@ -1,3 +1,26 @@
+/* Homepage previews preserve the image ratio and follow the available column width. */
+.home-community-grid > section,
+.home-discussion-entry {
+    min-width: 0;
+}
+.home-content-images {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0.75rem 0 1rem;
+    min-width: 0;
+}
+.home-content-images a {
+    display: block;
+    min-width: 0;
+}
+.home-content-images img {
+    display: block;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    border-radius: 6px;
+}
+
 /* ===== Private attachments (announcements & discussions) ===== */
 /* Flat Scandinavian palette: surfaces #faf7f3 / borders #d4cdc5 / radius 6px. */
 .attachment-list {

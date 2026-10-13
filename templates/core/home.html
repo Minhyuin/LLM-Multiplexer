@@ -28,13 +28,13 @@
     <section aria-labelledby="announcements-heading">
         <header class="section-heading"><div><span class="eyebrow-badge">01 / notice board</span><h2 id="announcements-heading">公告栏</h2></div><a href="{% url 'announcement-list' %}">全部公告 <span aria-hidden="true">↗</span></a></header>
         {% for item in announcements %}
-        <article class="notice-entry"><time class="small text-muted">{{ item.created_at|date:'Y.m.d' }}</time><h3>{{ item.title }}</h3><p class="post-body">{{ item.body|truncatechars:240 }}</p><a class="small" href="{% url 'announcement-list' %}#notice-{{ item.pk }}">阅读公告</a></article>
+        <article class="notice-entry"><time class="small text-muted">{{ item.created_at|date:'Y.m.d' }}</time><h3>{{ item.title }}</h3><p class="post-body">{{ item.body|truncatechars:240 }}</p>{% include 'core/_home_images.html' with images=item.home_images %}<a class="small" href="{% url 'announcement-list' %}#notice-{{ item.pk }}">阅读公告</a></article>
         {% empty %}<div class="empty-state"><h3 class="h5">暂时没有新公告</h3><p class="mb-0">队内的新消息，会在这里与你见面。</p></div>{% endfor %}
         {% if user.is_staff or user.profile.role == 'admin' %}<a class="small d-inline-block mt-3" href="{% url 'announcement-admin-list' %}">管理公告</a>{% endif %}
     </section>
     <section aria-labelledby="discussions-heading">
         <header class="section-heading"><div><span class="eyebrow-badge">02 / conversations</span><h2 id="discussions-heading">一起讨论</h2></div><a href="{% url 'discussion-list' %}">全部讨论 <span aria-hidden="true">↗</span></a></header>
-        {% for topic in discussion_topics %}<article class="community-row"><div><h3><a href="{% url 'discussion-detail' topic.pk %}">{{ topic.title }}</a></h3><p class="small text-muted mb-0">{{ topic.created_by.profile.display_name|default:topic.created_by.username }} · {{ topic.updated_at|date:'m-d H:i' }}</p></div><span class="small text-muted">{{ topic.post_count }} 条发言</span></article>
+        {% for topic in discussion_topics %}<article class="home-discussion-entry"><div class="community-row"><div><h3><a href="{% url 'discussion-detail' topic.pk %}">{{ topic.title }}</a></h3><p class="small text-muted mb-0">{{ topic.created_by.profile.display_name|default:topic.created_by.username }} · {{ topic.updated_at|date:'m-d H:i' }}</p></div><span class="small text-muted">{{ topic.post_count }} 条发言</span></div>{% include 'core/_home_images.html' with images=topic.home_images %}</article>
         {% empty %}<div class="empty-state"><h3 class="h5">一个问题，就是一个开始</h3><p>分享你的实践、发现，或还没想明白的事。</p><a href="{% url 'discussion-create' %}">发起第一场讨论 <span aria-hidden="true">↗</span></a></div>{% endfor %}
     </section>
 </div>

@@ -1,183 +1,101 @@
-{{ personal_summary.models|json_script:'personal-model-data' }}
-{{ dashboard.model_rank|json_script:'team-model-data' }}
 <script>
 (() => {
-    const palette = ['#5a7a6b','#7ba0b8','#a58a61','#a06c60','#607683','#5a7a6b','#b3947c'];
-    for (const [canvasId, dataId] of [['personalModelPieChart', 'personal-model-data'], ['teamModelUsageChart', 'team-model-data']]) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) continue;
-        const models = JSON.parse(document.getElementById(dataId).textContent) || [];
-        const total = models.reduce((sum, item) => sum + Number(item.total_tokens || 0), 0);
-        if (!total) {
-            const empty = document.createElement('p');
-            empty.className = 'text-muted text-center my-4';
-            empty.textContent = '暂无 Token 用量';
-            canvas.replaceWith(empty);
-            continue;
-        }
-        new Chart(canvas, {
-            type: 'doughnut',
-            data: {labels: models.map(item => item.model_name), datasets: [{
-                data: models.map(item => Number(item.total_tokens || 0)),
-                backgroundColor: palette
-            }]},
-            options: {responsive: true, plugins: {
-                legend: {position: 'bottom', labels: {boxWidth: 12}},
-                tooltip: {callbacks: {label: context => `${context.label}: ${Number(context.raw).toLocaleString()} Tokens (${(Number(context.raw) / total * 100).toFixed(1)}%)`}}
-            }}
-        });
+    const root = document.getElementById('dashboard-modules');
+    if (!root) return;
+    const charts = new Map();
+    const revisions = new WeakMap();
+    let active = 0;
+    const waiters = [];
+    async function acquire() {
+        if (active < 2) {active++; return;}
+        await new Promise(resolve => waiters.push(resolve));
     }
+    function release() {const next=waiters.shift(); if (next) next(); else active--;}
+    let controller = new AbortController(), generation = 0;
+    const palette = ['#5a7a6b','#7ba0b8','#a58a61','#a06c60','#607683','#b3947c'];
+    const parse = (slot, id) => JSON.parse(slot.querySelector('#' + id)?.textContent || '[]') || [];
+    function draw(slot) {
+        if (!window.Chart) throw new Error('图表资源尚未加载');
+        for (const canvas of slot.querySelectorAll('canvas')) {
+            const old = charts.get(canvas.id); if (old) old.destroy();
+            let type = 'bar', labels = [], datasets = [];
+            if (['personalModelPieChart', 'teamModelUsageChart', 'modelPieChart'].includes(canvas.id)) {
+                const rows = parse(slot, canvas.id === 'personalModelPieChart' ? 'personal-model-data' : canvas.id === 'modelPieChart' ? 'error-model-rank-data' : 'team-model-data');
+                type = canvas.id === 'personalModelPieChart' ? 'pie' : 'doughnut'; labels = rows.map(x => x.model_name);
+                datasets = [{data: rows.map(x => Number((canvas.id === 'modelPieChart' ? x.total_errors : x.total_tokens) || 0)), backgroundColor: palette}];
+            } else if (canvas.id === 'trendChart') {
+                const rows = parse(slot, 'trend-data'); type = 'line'; labels = rows.map(x => x.date);
+                datasets = [['输入 Tokens','prompt_tokens','#85827b'],['输出 Tokens','completion_tokens','#5a7a6b'],['缓存 Tokens','cached_tokens','#a58a61'],['思考 Tokens','thinking_tokens','#607683']].map(([label,key,color]) => ({label,data:rows.map(x => x[key] || 0),borderColor:color,tension:.3,pointRadius:1}));
+            } else {
+                const rows = parse(slot, canvas.id === 'userBarChart' ? 'user-rank-data' : 'model-rank-data');
+                labels = rows.map(x => x.display_name || x.model_name || '未设置显示名');
+                datasets = [{label:'Token', data:rows.map(x => x.total_tokens || 0),backgroundColor:palette[0]}];
+            }
+            const options = {responsive:true, plugins:{legend:{display:type !== 'bar',position:'bottom'}}};
+            const circular = type === 'doughnut' || type === 'pie';
+            if (!circular) options.scales = {y:{beginAtZero:true}};
+            if (circular && !datasets[0].data.some(Number)) {
+                const empty = document.createElement('p'); empty.className='text-muted text-center'; empty.textContent='暂无 Token 用量'; canvas.replaceWith(empty); continue;
+            }
+            charts.set(canvas.id, new Chart(canvas, {type,data:{labels,datasets},options}));
+        }
+    }
+    function placeholder(slot, text) {
+        const p = document.createElement('p'); p.className='text-muted'; p.textContent=text; slot.replaceChildren(p);
+    }
+    async function load(slot, page=1, version=generation) {
+        slot.setAttribute('aria-busy','true');
+        const params = new URLSearchParams(location.search); params.set('page',page);
+        const signal = controller.signal;
+        const revision=(revisions.get(slot) || 0)+1; revisions.set(slot,revision);
+        await acquire();
+        if (version !== generation || signal.aborted || revisions.get(slot)!==revision) {release(); return;}
+        const child = new AbortController();
+        const timeout = setTimeout(() => child.abort(), 30000);
+        const abort = () => child.abort(); signal.addEventListener('abort',abort,{once:true});
+        try {
+            const response = await fetch(root.dataset.endpoint + slot.dataset.module + '/?' + params, {credentials:'same-origin',signal:child.signal,headers:{Accept:'application/json'}});
+            if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('加载失败');
+            const data = await response.json();
+            if (version !== generation || signal.aborted || revisions.get(slot)!==revision) return;
+            slot.innerHTML = data.html; draw(slot);
+        } catch (error) {
+            if (version !== generation || signal.aborted || revisions.get(slot)!==revision) return;
+            placeholder(slot,'此模块暂时无法加载，请重试。');
+            const button=document.createElement('button');button.className='btn btn-sm btn-outline-primary';button.textContent='重试';
+            button.onclick=()=>load(slot,page,generation);slot.append(button);
+        } finally {
+            clearTimeout(timeout);signal.removeEventListener('abort',abort);
+            release();
+            if (version === generation && revisions.get(slot)===revision) slot.setAttribute('aria-busy','false');
+        }
+    }
+    async function refresh() {
+        controller.abort(); controller=new AbortController();const version=++generation;
+        for (const chart of charts.values()) chart.destroy(); charts.clear();
+        const order=['summary','personal','trend','rankings','keys','errors','active'];
+        const queue=order.map(name=>root.querySelector('[data-module="'+name+'"]')).filter(Boolean);
+        queue.forEach(slot=>placeholder(slot,'正在加载…'));
+        let next=0;
+        // Two workers avoid sending every expensive section to the server at once.
+        await Promise.all([0,1].map(async()=>{while(next<queue.length && version===generation){const slot=queue[next++];await load(slot,1,version);}}));
+    }
+    window.getCustomParams = () => '';
+    window.applyCustomRange = () => {
+        const start=document.getElementById('customDateStart').value,end=document.getElementById('customDateEnd').value;
+        if (!start || !end || start>end) {alert('请选择有效的起止日期');return;}
+        const params=new URLSearchParams(location.search);params.set('range','custom');params.set('start',start);params.set('end',end);navigate(params);
+    };
+    function navigate(params) {
+        history.pushState(null,'','?'+params.toString());document.body.classList.remove('dashboard-navigating');
+        document.querySelectorAll('.page-hero a[href^="?range="]').forEach(a=>a.classList.toggle('active',new URLSearchParams(a.search).get('range')===params.get('range')));
+        refresh();
+    }
+    document.querySelectorAll('.page-hero a[href^="?range="]').forEach(a=>{a.onclick=event=>{event.preventDefault();const params=new URLSearchParams(location.search);params.set('range',new URLSearchParams(a.search).get('range'));navigate(params);};});
+    document.querySelectorAll('.dashboard-filter-select').forEach((select,index)=>{select.onchange=()=>{const params=new URLSearchParams(location.search);params.set(index===0?'group':'grade',select.value);navigate(params);};});
+    root.addEventListener('click',event=>{const button=event.target.closest('[data-key-page]');if(button){event.preventDefault();load(root.querySelector('[data-module="keys"]'),button.dataset.keyPage,generation);}});
+    window.addEventListener('popstate',()=>location.reload());
+    window.addEventListener('pagehide',()=>controller.abort());
+    refresh();
 })();
-</script>
-{{ dashboard.trend|json_script:'trend-data' }}
-{{ dashboard.model_rank|json_script:'model-rank-data' }}
-{{ dashboard.error_model_rank|json_script:'error-model-rank-data' }}
-{{ dashboard.user_rank|json_script:'user-rank-data' }}
-<script>
-const parseJsonScript = (id) => {
-    const el = document.getElementById(id);
-    return el ? JSON.parse(el.textContent) : [];
-};
-
-const trendData = parseJsonScript('trend-data');
-const modelRank = parseJsonScript('model-rank-data');
-const errorModelRank = parseJsonScript('error-model-rank-data');
-const userRank = parseJsonScript('user-rank-data');
-
-const calcSuggestedMax = (values) => {
-    const max = Math.max(...values, 0);
-    if (max <= 0) return 1;
-    return Math.ceil(max * 1.15);
-};
-
-const formatTokenTick = (value) => {
-    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
-    if (value >= 1000) return `${Math.round(value / 1000)}K`;
-    return value;
-};
-
-const makeTokenDataset = (label, key, borderColor, backgroundColor) => ({
-    label,
-    data: trendData.map(x => x[key] || 0),
-    borderColor,
-    backgroundColor,
-    fill: true,
-    tension: 0.42,
-    cubicInterpolationMode: 'monotone',
-    pointRadius: 4,
-    pointHoverRadius: 6,
-    borderWidth: 2.5,
-});
-
-new Chart(document.getElementById('trendChart'), {
-    type: 'line',
-    data: {
-        labels: trendData.map(x => x.date),
-        datasets: [
-            makeTokenDataset('输入 Tokens', 'prompt_tokens', '#85827b', 'rgba(133,130,123,.22)'),
-            makeTokenDataset('输出 Tokens', 'completion_tokens', '#5a7a6b', 'rgba(90,122,107,.18)'),
-            makeTokenDataset('缓存 Tokens', 'cached_tokens', '#a58a61', 'rgba(165,138,97,.16)'),
-            makeTokenDataset('思考 Tokens', 'thinking_tokens', '#607683', 'rgba(96,118,131,.14)'),
-        ]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        aspectRatio: 3.05,
-        interaction: {mode: 'index', intersect: false},
-        plugins: {
-            legend: {display: false},
-            tooltip: {
-                callbacks: {
-                    label: (context) => `${context.dataset.label}: ${Number(context.parsed.y || 0).toLocaleString()}`
-                }
-            }
-        },
-        scales: {
-            x: {grid: {color: 'rgba(148,163,184,.18)'}, ticks: {maxRotation: 0}},
-            y: {
-                beginAtZero: true,
-                suggestedMax: calcSuggestedMax(trendData.flatMap(x => [x.prompt_tokens || 0, x.completion_tokens || 0, x.cached_tokens || 0, x.thinking_tokens || 0])),
-                grid: {color: 'rgba(148,163,184,.18)'},
-                ticks: {callback: formatTokenTick}
-            }
-        }
-    }
-});
-
-const modelPieCanvas = document.getElementById('modelPieChart');
-if (modelPieCanvas) {
-    new Chart(modelPieCanvas, {
-        type: 'pie',
-        data: {
-            labels: errorModelRank.map(x => x.model_name),
-            datasets: [{data: errorModelRank.map(x => x.total_errors || 0)}]
-        }
-    });
-}
-
-new Chart(document.getElementById('modelBarChart'), {
-    type: 'bar',
-    data: {
-        labels: modelRank.map(x => x.model_name),
-        datasets: [{
-            label: 'Token',
-            data: modelRank.map(x => x.total_tokens || 0),
-            backgroundColor: '#7ba0b8',
-            minBarLength: 6,
-        }]
-    },
-    options: {
-        responsive: true,
-        scales: {
-            y: {
-                beginAtZero: true,
-                suggestedMax: calcSuggestedMax(modelRank.map(x => x.total_tokens || 0)),
-            }
-        }
-    }
-});
-
-new Chart(document.getElementById('userBarChart'), {
-    type: 'bar',
-    data: {
-        labels: userRank.map(x => x.display_name || '未设置显示名'),
-        datasets: [{
-            label: 'Token',
-            data: userRank.map(x => x.total_tokens || 0),
-            backgroundColor: '#5a7a6b',
-            minBarLength: 6,
-        }]
-    },
-    options: {
-        responsive: true,
-        scales: {
-            y: {
-                beginAtZero: true,
-                suggestedMax: calcSuggestedMax(userRank.map(x => x.total_tokens || 0)),
-            }
-        }
-    }
-});
-
-function getCustomParams() {
-    var s = document.getElementById('customDateStart');
-    var e = document.getElementById('customDateEnd');
-    if (s && e && s.value && e.value) {
-        return '&start=' + s.value + '&end=' + e.value;
-    }
-    return '';
-}
-
-function applyCustomRange() {
-    var s = document.getElementById('customDateStart').value;
-    var e = document.getElementById('customDateEnd').value;
-    if (!s || !e) { alert('请选择起止日期'); return; }
-    document.body.classList.add('dashboard-navigating');
-    var params = new URLSearchParams(window.location.search);
-    params.set('range', 'custom');
-    params.set('start', s);
-    params.set('end', e);
-    location.href = '?' + params.toString();
-}
 </script>

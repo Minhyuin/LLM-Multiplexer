@@ -94,98 +94,126 @@ def _get_filter_options():
 
 def _enrich_display_names(data):
     """Add display_name to user_rank, recent_errors, recent_active_users."""
-    for row in data["user_rank"]:
+    for row in data.get("user_rank", []):
         row["display_name"] = _display_name_strict(row.get("user__profile__display_name"), row.get("user__username"))
-    for item in data["recent_errors"]:
+    for item in data.get("recent_errors", []):
         if item.user_id and hasattr(item.user, "profile"):
             item.display_name = _display_name_strict(item.user.profile.display_name, item.user.username)
         else:
             item.display_name = "-"
-    for row in data["recent_active_users"]:
+    for row in data.get("recent_active_users", []):
         row["display_name"] = _display_name_strict(row.get("user__profile__display_name"), row.get("user__username"))
+
+
+def _dashboard_scope(request, admin=False):
+    range_name = request.GET.get("range", "today")
+    group_name = request.GET.get("group", "all")
+    grade_name = request.GET.get("grade", "all")
+    start, end = _get_range_start(range_name, request)
+    all_logs = UsageLog.objects.exclude(user=None)
+    if start:
+        all_logs = all_logs.filter(request_time__gte=start)
+    if end:
+        all_logs = all_logs.filter(request_time__lte=end)
+    visible = all_logs
+    if not admin and not request.user.is_staff:
+        visible = visible.filter(user__profile__is_dashboard_visible=True)
+    if group_name != "all":
+        visible = visible.filter(user__profile__lab_group=group_name)
+    if grade_name != "all":
+        visible = visible.filter(user__profile__grade=grade_name)
+    return all_logs, visible, {
+        "range_name": range_name, "group_name": group_name, "grade_name": grade_name,
+        "custom_start": request.GET.get("start", ""), "custom_end": request.GET.get("end", ""),
+    }
+
+
+def _dashboard_shell(request, admin=False):
+    from django.urls import reverse
+    _, _, context = _dashboard_scope(request, admin)
+    groups, grades = _get_filter_options()
+    context.update(group_options=groups, grade_options=grades, dashboard_is_admin=admin or request.user.is_staff,
+                   module_base_url=reverse("admin-dashboard" if admin else "public-dashboard") + "modules/")
+    # Statistics endpoints only read data; do not start an upstream import on page load.
+    return render(request, "dashboard/admin_dashboard.html" if admin else "dashboard/public_dashboard.html", context)
 
 
 @login_required
 def public_dashboard(request):
     if not settings.PUBLIC_DASHBOARD_ENABLED and not request.user.is_staff:
         return render(request, "dashboard/dashboard_unavailable.html")
-
-    range_name = request.GET.get("range", "today")
-    group_name = request.GET.get("group", "all")
-    grade_name = request.GET.get("grade", "all")
-
-    range_start, range_end = _get_range_start(range_name, request)
-    all_logs = UsageLog.objects.exclude(user=None)
-    if range_start:
-        all_logs = all_logs.filter(request_time__gte=range_start)
-    if range_end:
-        all_logs = all_logs.filter(request_time__lte=range_end)
-
-    visible_logs = all_logs
-    if not request.user.is_staff:
-        visible_logs = visible_logs.filter(user__profile__is_dashboard_visible=True)
-    if group_name != "all":
-        visible_logs = visible_logs.filter(user__profile__lab_group=group_name)
-    if grade_name != "all":
-        visible_logs = visible_logs.filter(user__profile__grade=grade_name)
-
-    trend_bucket = "hour" if range_name == "today" else "day"
-    data = aggregate_dashboard(visible_logs, trend_bucket=trend_bucket)
-    _enrich_display_names(data)
-
-    personal_summary = None
-    if not request.user.is_staff:
-        personal_logs = all_logs.filter(user=request.user)
-        personal_summary = _build_personal_dashboard_summary(request.user, visible_logs, personal_logs)
-
-    groups, grades = _get_filter_options()
-    return render(request, "dashboard/public_dashboard.html", {
-        "dashboard": data,
-        "range_name": range_name,
-        "personal_summary": personal_summary,
-        "group_name": group_name,
-        "group_options": groups,
-        "grade_name": grade_name,
-        "grade_options": grades,
-        "enable_auto_sync": True,
-        "custom_start": request.GET.get("start", ""),
-        "custom_end": request.GET.get("end", ""),
-    })
+    return _dashboard_shell(request)
 
 
 @admin_required
 def admin_dashboard(request):
-    range_name = request.GET.get("range", "today")
-    group_name = request.GET.get("group", "all")
-    grade_name = request.GET.get("grade", "all")
+    return _dashboard_shell(request, admin=True)
 
-    range_start, range_end = _get_range_start(range_name, request)
-    logs = UsageLog.objects.exclude(user=None)
-    if range_start:
-        logs = logs.filter(request_time__gte=range_start)
-    if range_end:
-        logs = logs.filter(request_time__lte=range_end)
-    if group_name != "all":
-        logs = logs.filter(user__profile__lab_group=group_name)
-    if grade_name != "all":
-        logs = logs.filter(user__profile__grade=grade_name)
 
-    trend_bucket = "hour" if range_name == "today" else "day"
-    data = aggregate_dashboard(logs, trend_bucket=trend_bucket)
-    _enrich_display_names(data)
+DASHBOARD_MODULES = {
+    "summary": {"summary"}, "trend": {"trend", "models"},
+    "rankings": {"users"}, "keys": {"keys"}, "errors": {"errors"}, "active": {"active"},
+}
 
-    groups, grades = _get_filter_options()
-    return render(request, "dashboard/admin_dashboard.html", {
-        "dashboard": data,
-        "range_name": range_name,
-        "group_name": group_name,
-        "group_options": groups,
-        "grade_name": grade_name,
-        "grade_options": grades,
-        "enable_auto_sync": True,
-        "custom_start": request.GET.get("start", ""),
-        "custom_end": request.GET.get("end", ""),
-    })
+
+def _dashboard_module(request, module, admin=False):
+    from django.http import HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotFound
+    from django.template.loader import render_to_string
+    from django.http import JsonResponse
+    if module not in {*DASHBOARD_MODULES, "personal"}:
+        return HttpResponseNotFound()
+    if module == "active" and not (admin or request.user.is_staff or request.user.profile.role == "admin"):
+        return HttpResponseForbidden()
+    all_logs, visible, context = _dashboard_scope(request, admin)
+    context["dashboard_is_admin"] = admin or request.user.is_staff
+    if module == "personal":
+        if admin or request.user.is_staff:
+            data = aggregate_dashboard(visible, sections={"models"})
+            context["dashboard"] = data
+            template = "dashboard/partials/module_error_models.html"
+        else:
+            context["personal_summary"] = _build_personal_dashboard_summary(request.user, visible, all_logs.filter(user=request.user))
+            template = "dashboard/partials/module_personal.html"
+    else:
+        bucket = "hour" if context["range_name"] == "today" else "day"
+        # Long histories use calendar months to bound chart payload size.
+        if context["range_name"] == "all":
+            bucket = "month"
+        elif context["range_name"] == "custom":
+            start, end = _get_range_start("custom", request)
+            if start and end and (end - start).days > 180:
+                bucket = "month"
+        try:
+            page = max(1, int(request.GET.get("page", "1")))
+        except ValueError:
+            return HttpResponseBadRequest("无效页码")
+        data = aggregate_dashboard(visible, trend_bucket=bucket, sections=DASHBOARD_MODULES[module],
+                                   key_page=page if module == "keys" else None, key_page_size=25)
+        _enrich_display_names(data)
+        context["dashboard"] = data
+        template = "dashboard/partials/module_" + module + ".html"
+    response = JsonResponse({"html": render_to_string(template, context, request=request), "module": module})
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def public_dashboard_module(request, module):
+    if request.method not in {"GET", "HEAD"}:
+        from django.http import HttpResponseNotAllowed
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if not settings.PUBLIC_DASHBOARD_ENABLED and not request.user.is_staff:
+        from django.http import HttpResponseForbidden
+        return HttpResponseForbidden()
+    return _dashboard_module(request, module)
+
+
+@admin_required
+def admin_dashboard_module(request, module):
+    if request.method not in {"GET", "HEAD"}:
+        from django.http import HttpResponseNotAllowed
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    return _dashboard_module(request, module, admin=True)
 
 
 @admin_required

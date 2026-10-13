@@ -1,0 +1,19 @@
+{% load ui_tags %}
+        <div class="card panel-card h-100"><div class="card-body">
+            <h5 class="section-title">🧾 队员 Token 使用情况</h5>
+            <div class="table-responsive soft-table-wrap scroll-table"><table class="table table-sm soft-table align-middle">
+                <thead><tr><th>队员</th><th>分组</th><th title="当前筛选范围内累计 Token 用量最多的模型">最高使用模型</th><th>请求数</th><th>Token</th></tr></thead>
+                <tbody>
+                {% for item in dashboard.key_rank %}
+                    <tr><td>{{ item.display_name }}</td><td>{{ item.group_name }}</td><td>{{ item.top_model }}</td><td>{{ item.total_requests }}</td><td>{{ item.total_tokens|token_unit }}</td></tr>
+                {% empty %}
+                    <tr><td colspan="5" class="text-center text-muted">暂无数据</td></tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+            <nav class="d-flex gap-2 align-items-center mt-3" aria-label="队员用量分页">
+                {% if dashboard.key_pagination.has_previous %}<button class="btn btn-sm btn-soft" data-key-page="{{ dashboard.key_pagination.page|add:'-1' }}">上一页</button>{% endif %}
+                <span class="small text-muted">第 {{ dashboard.key_pagination.page }} / {{ dashboard.key_pagination.num_pages }} 页 · 共 {{ dashboard.key_pagination.total }} 条</span>
+                {% if dashboard.key_pagination.has_next %}<button class="btn btn-sm btn-soft" data-key-page="{{ dashboard.key_pagination.page|add:'1' }}">下一页</button>{% endif %}
+            </nav>
+        </div></div>

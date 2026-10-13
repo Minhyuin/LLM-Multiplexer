@@ -1,0 +1,14 @@
+{% load ui_tags %}
+        <div class="card panel-card h-100"><div class="card-body">
+            <h5 class="section-title">🚨 最近错误请求</h5>
+            <div class="table-responsive soft-table-wrap scroll-table"><table class="table table-sm soft-table align-middle">
+                <thead><tr><th>时间</th><th>模型</th><th>用户</th><th>错误</th></tr></thead>
+                <tbody>
+                {% for item in dashboard.recent_errors %}
+                    <tr><td>{{ item.request_time|date:'m-d H:i' }}</td><td>{{ item.model_name }}</td><td>{{ item.display_name|default:'-' }}</td><td>{{ item.error_message|default:item.status_code }}</td></tr>
+                {% empty %}
+                    <tr><td colspan="4" class="text-center text-muted">暂无错误请求</td></tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+        </div></div>
