@@ -1,3 +1,4 @@
+from decimal import Decimal
 from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
@@ -82,6 +83,21 @@ class DashboardModuleTests(TestCase):
         self.assertEqual(self.module("active").status_code, 403)
         self.assertEqual(self.client.get(reverse("admin-dashboard-module", args=["summary"])).status_code, 403)
         self.assertEqual(self.module("personal").status_code, 200)
+
+    def test_summary_cost_keeps_at_most_four_decimals(self):
+        UsageLog.objects.create(request_id="cost-trailing", user=self.user, model_name="alpha",
+                                total_tokens=1, estimated_cost=Decimal("4.354000"), request_time=timezone.now())
+        html = self.module("summary", range="all").json()["html"]
+        self.assertIn("$4.354<", html)
+        self.assertNotIn("4.3540", html)
+
+    def test_summary_cost_has_no_float_tail(self):
+        for index in range(3):
+            UsageLog.objects.create(request_id=f"cost-{index}", user=self.user, model_name="alpha",
+                                    total_tokens=1, estimated_cost=Decimal("0.1"), request_time=timezone.now())
+        html = self.module("summary", range="all").json()["html"]
+        self.assertIn("$0.3<", html)
+        self.assertNotIn("30000000000000004", html)
 
     def test_modules_are_read_only(self):
         self.assertEqual(self.client.post(reverse("public-dashboard-module", args=["summary"])).status_code, 405)

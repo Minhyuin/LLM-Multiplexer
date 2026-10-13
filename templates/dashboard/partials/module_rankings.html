@@ -1,2 +1,6 @@
-<div class="card panel-card chart-card"><div class="card-body"><h5 class="section-title">🏅 队员排行榜</h5><canvas id="userBarChart" height="180"></canvas></div></div>
+<div class="row g-3">
+    <div class="col-lg-6"><div class="card panel-card chart-card h-100"><div class="card-body"><h5 class="section-title">🤖 模型排行榜</h5><div class="dashboard-chart-bar"><canvas id="modelBarChart" height="180"></canvas></div></div></div></div>
+    <div class="col-lg-6"><div class="card panel-card chart-card h-100"><div class="card-body"><h5 class="section-title">🏅 队员排行榜</h5><div class="dashboard-chart-bar"><canvas id="userBarChart" height="180"></canvas></div></div></div></div>
+</div>
+{{ dashboard.model_rank|json_script:"model-rank-data" }}
 {{ dashboard.user_rank|json_script:"user-rank-data" }}

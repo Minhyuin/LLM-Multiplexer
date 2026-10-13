@@ -1,15 +1,18 @@
 {% include 'dashboard/partials/dashboard_filters.html' %}
 <div id="dashboard-modules" data-endpoint="{{ module_base_url }}" aria-label="队内统计">
-    <section data-module="summary" class="mb-4" aria-label="统计总览" aria-busy="true"><p class="text-muted">正在加载统计总览…</p></section>
-    <div class="row g-4 mb-4">
+    <section data-module="summary" class="mb-3" aria-label="统计总览" aria-busy="true"><p class="text-muted">正在加载统计总览…</p></section>
+    <div class="row g-3 mb-3">
         <section data-module="trend" class="col-lg-8" aria-label="趋势与模型用量" aria-busy="true"><p class="text-muted">正在加载趋势与模型用量…</p></section>
-        <section data-module="personal" class="col-lg-4" aria-label="我的使用概览" aria-busy="true"><p class="text-muted">正在加载我的使用概览…</p></section>
+        {# The right column stacks the personal panel with the admin-only section so both columns end at the same height. #}
+        <div class="col-lg-4 dashboard-column-stack">
+            <section data-module="personal" aria-label="我的使用概览" aria-busy="true"><p class="text-muted">正在加载我的使用概览…</p></section>
+            {% if dashboard_is_admin %}<section data-module="active" aria-label="管理视角补充信息" aria-busy="true"><p class="text-muted">正在加载管理视角补充信息…</p></section>{% endif %}
+        </div>
     </div>
-    <section data-module="rankings" class="mb-4" aria-label="队员排行榜" aria-busy="true"><p class="text-muted">正在加载队员排行榜…</p></section>
-    <div class="row g-4 mb-4">
+    <section data-module="rankings" class="mb-3" aria-label="排行榜" aria-busy="true"><p class="text-muted">正在加载排行榜…</p></section>
+    <div class="row g-3 mb-3">
         <section data-module="keys" class="col-lg-6" aria-label="队员 Token 使用情况" aria-busy="true"><p class="text-muted">正在加载队员 Token 使用情况…</p></section>
         <section data-module="errors" class="col-lg-6" aria-label="最近错误请求" aria-busy="true"><p class="text-muted">正在加载最近错误请求…</p></section>
     </div>
-    {% if dashboard_is_admin %}<section data-module="active" class="mb-4" aria-label="管理视角补充信息" aria-busy="true"><p class="text-muted">正在加载管理视角补充信息…</p></section>{% endif %}
     <noscript><p class="alert alert-info">统计面板需要启用 JavaScript 才能分区加载数据。</p></noscript>
 </div>

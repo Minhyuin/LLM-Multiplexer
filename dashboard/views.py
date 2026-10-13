@@ -151,8 +151,10 @@ def admin_dashboard(request):
 
 
 DASHBOARD_MODULES = {
+    # ``rankings`` carries both halves of the side-by-side ranking row: the model bar
+    # chart needs ``models`` and the member bar chart needs ``users``.
     "summary": {"summary"}, "trend": {"trend", "models"},
-    "rankings": {"users"}, "keys": {"keys"}, "errors": {"errors"}, "active": {"active"},
+    "rankings": {"models", "users"}, "keys": {"keys"}, "errors": {"errors"}, "active": {"active"},
 }
 
 

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
@@ -6,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 from quota.activity import personal_activity
+from quota.models import UserQuotaSnapshot
 from usage.models import UsageLog
 
 
@@ -57,3 +59,19 @@ class PersonalActivityTests(TestCase):
         self.assertEqual(response.context['activity']['total'], 1)
         self.assertContains(response, '我的调用活跃度')
         self.assertContains(response, 'activity-level-1')
+
+    def test_quota_page_costs_keep_at_most_four_decimals(self):
+        today = timezone.localdate()
+        UserQuotaSnapshot.objects.create(user=self.user, year=today.year, month=today.month,
+                                         token_limit=1000, token_used=10,
+                                         cost_limit=Decimal("5.0000"), cost_used=Decimal("1.2300"))
+        for index in range(3):
+            UsageLog.objects.create(request_id=f'cost-{index}', user=self.user, model_name='model',
+                                    request_time=timezone.now(), estimated_cost=Decimal('0.1'))
+        self.client.force_login(self.user)
+        html = self.client.get('/quota/my/?range=today').content.decode()
+        self.assertIn('$1.23<', html)
+        self.assertIn('$5<', html)
+        self.assertIn('$0.3<', html)
+        self.assertNotIn('1.2300', html)
+        self.assertNotIn('30000000000000004', html)

@@ -12,7 +12,7 @@
             <div class="token-trend-frame"><canvas id="trendChart" height="130"></canvas></div>
             <div class="dashboard-model-usage">
                 <span class="dashboard-model-usage-label">模型用量</span>
-                <div style="max-width: 360px; margin: 12px auto;"><canvas id="teamModelUsageChart" height="160" role="img" aria-label="队内模型 Token 用量占比"></canvas></div>
+                <div class="dashboard-chart-pie"><canvas id="teamModelUsageChart" height="160" role="img" aria-label="队内模型 Token 用量占比"></canvas></div>
                 <div class="model-chip-group mt-2">
                     {% for item in dashboard.model_rank %}
                         <span class="model-chip">{{ item.model_name }} · {{ item.total_tokens|token_unit }}</span>
@@ -22,7 +22,5 @@
                 </div>
             </div>
         </div></div>
-<div class="card panel-card chart-card mt-4"><div class="card-body"><h5 class="section-title">🤖 模型排行榜</h5><canvas id="modelBarChart" height="180"></canvas></div></div>
 {{ dashboard.trend|json_script:"trend-data" }}
 {{ dashboard.model_rank|json_script:"team-model-data" }}
-{{ dashboard.model_rank|json_script:"model-rank-data" }}

@@ -23,7 +23,7 @@
             </div>
             <div class="dashboard-model-usage mt-3">
                 <span class="dashboard-model-usage-label">我的模型用量</span>
-                <div style="max-width: 360px; margin: 12px auto;"><canvas id="personalModelPieChart" height="160" role="img" aria-label="我的模型 Token 用量占比"></canvas></div>
+                <div class="dashboard-chart-pie"><canvas id="personalModelPieChart" height="160" role="img" aria-label="我的模型 Token 用量占比"></canvas></div>
                 <div class="model-chip-group mt-2">
                     {% for item in personal_summary.models %}
                         <span class="model-chip">{{ item.model_name }} · {{ item.total_tokens|token_unit }}</span>

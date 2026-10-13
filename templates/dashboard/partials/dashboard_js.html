@@ -31,7 +31,7 @@
                 labels = rows.map(x => x.display_name || x.model_name || '未设置显示名');
                 datasets = [{label:'Token', data:rows.map(x => x.total_tokens || 0),backgroundColor:palette[0]}];
             }
-            const options = {responsive:true, plugins:{legend:{display:type !== 'bar',position:'bottom'}}};
+            const options = {responsive:true, maintainAspectRatio:false, plugins:{legend:{display:type !== 'bar',position:'bottom'}}};
             const circular = type === 'doughnut' || type === 'pie';
             if (!circular) options.scales = {y:{beginAtZero:true}};
             if (circular && !datasets[0].data.some(Number)) {

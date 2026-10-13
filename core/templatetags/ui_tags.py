@@ -1,4 +1,7 @@
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 from django import template
+from django.utils import formats
 
 from core.attachments import human_size
 
@@ -34,6 +37,35 @@ def get_item(mapping, key):
     if isinstance(mapping, dict):
         return mapping.get(key)
     return None
+
+
+@register.filter
+def at_most(value, places=4):
+    """Render a number with at most ``places`` decimal places (default 4).
+
+    Rounds half-up and drops trailing zeros, so accumulated float artefacts such as
+    ``4.354000000000000`` or ``0.30000000000000004`` render as ``4.354`` / ``0.3``.
+    """
+    if value is None or value == "":
+        return "0"
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return value
+    if not number.is_finite():
+        return value
+    try:
+        places = int(places)
+    except (TypeError, ValueError):
+        places = 4
+    try:
+        number = number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return value
+    text = format(number, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".") or "0"
+    return formats.number_format(number, len(text.partition(".")[2]))
 
 
 @register.filter

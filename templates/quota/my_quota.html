@@ -41,7 +41,7 @@
     <div class="col-md-3 col-6">
         <div class="card panel-card stat-card stat-card-violet"><div class="card-body">
             <div class="label">💵 费用</div>
-            <div class="value">${{ usage_stats.total_cost|default:'0' }}</div>
+            <div class="value">${{ usage_stats.total_cost|default:'0'|at_most:4 }}</div>
         </div></div>
     </div>
     <div class="col-md-3 col-6">
@@ -96,13 +96,13 @@
                     <div class="col-6">
                         <div class="personal-summary-item">
                             <span>费用已用</span>
-                            <strong>${{ snapshot.cost_used }}</strong>
+                            <strong>${{ snapshot.cost_used|at_most:4 }}</strong>
                         </div>
                     </div>
                     <div class="col-6">
                         <div class="personal-summary-item">
                             <span>费用上限</span>
-                            <strong>${{ snapshot.cost_limit }}</strong>
+                            <strong>${{ snapshot.cost_limit|at_most:4 }}</strong>
                         </div>
                     </div>
                 </div>
@@ -121,7 +121,7 @@
                         <tr>
                             <td>{{ item.year }}-{{ item.month|stringformat:'02d' }}</td>
                             <td>{{ item.token_used|token_unit }} / {{ item.token_limit|token_unit }}</td>
-                            <td>${{ item.cost_used }} / ${{ item.cost_limit }}</td>
+                            <td>${{ item.cost_used|at_most:4 }} / ${{ item.cost_limit|at_most:4 }}</td>
                         </tr>
                     {% endfor %}
                     </tbody>
