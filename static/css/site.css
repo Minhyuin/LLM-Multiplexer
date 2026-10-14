@@ -14,68 +14,24 @@
 /* ===== Smooth page transitions ===== */
 @view-transition { navigation: auto; }
 
-body.site-body {
+body.site-body,
+body.site-body.login-page,
+body.site-body.dashboard-page,
+body.site-body.quota-page,
+body.site-body.usage-page,
+body.site-body.credentials-page,
+body.site-body.events-page {
     min-height: 100vh;
-    background:
-        radial-gradient(circle at top left, rgba(79, 70, 229, 0.16), transparent 30%),
-        radial-gradient(circle at top right, rgba(6, 182, 212, 0.12), transparent 26%),
-        linear-gradient(rgba(241,246,255,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/background-main.jpg') center/cover fixed no-repeat,
-        linear-gradient(180deg, #eef4ff 0%, #f8fbff 28%, #f4f7fb 100%);
+    background: #f5f0eb;
     color: var(--text-main);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-}
-
-body.site-body.login-page {
-    background:
-        linear-gradient(rgba(241,246,255,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/background-main.jpg') center/cover fixed no-repeat;
-}
-
-body.site-body.dashboard-page {
-    background:
-        linear-gradient(rgba(245,248,252,0.42), rgba(245,248,252,0.52)),
-        url('/static/brand/dashboard-background.jpg') center/cover fixed no-repeat;
-}
-
-body.dashboard-page main {
-    transition: opacity 0.14s ease, filter 0.14s ease;
 }
 
 body.dashboard-page.dashboard-navigating main {
     opacity: 0.62;
     filter: saturate(0.9);
 }
-
-body.site-body.quota-page {
-    background:
-        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/quota-background.jpg') center/cover fixed no-repeat;
-}
-
-body.site-body.usage-page {
-    background:
-        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/usage-background.jpg') center/cover fixed no-repeat;
-}
-
-body.site-body.credentials-page {
-    background:
-        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/credentials-background.jpg') center/cover fixed no-repeat;
-}
-
-body.site-body.events-page {
-    background:
-        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/events-background.jpg') center/cover fixed no-repeat;
-}
-
-.site-shell {
-    min-height: 100vh;
-}
-
 .site-navbar {
     background: rgba(15, 23, 42, 0.9);
     backdrop-filter: blur(18px);
@@ -186,9 +142,7 @@ body.site-body.events-page {
 }
 
 .hero-home {
-    background:
-        linear-gradient(135deg, rgba(255,255,255,0.88), rgba(255,255,255,0.82)),
-        url('/static/brand/relay-station-background.jpg') center/cover no-repeat;
+    background: #faf7f3;
 }
 
 .hero-panel-lg {
@@ -256,20 +210,18 @@ body.site-body.events-page {
     border-radius: 24px;
     min-height: 220px;
     box-shadow: var(--card-shadow);
-    background: url('/static/brand/team-motto.jpg') center/cover no-repeat;
+    background: #faf7f3;
+    border: 1px solid var(--card-border);
 }
 
 .team-motto-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, rgba(10,16,32,0.72), rgba(25,44,86,0.38));
-    backdrop-filter: blur(2px);
+    display: none;
 }
 
 .team-motto-content {
     position: relative;
     z-index: 1;
-    color: #fff;
+    color: var(--text-main);
     padding: 2rem 2.2rem;
 }
 
@@ -301,9 +253,9 @@ body.site-body.events-page {
 
 .login-card {
     border-radius: 28px;
-    background: rgba(255, 255, 255, 0.68) !important;
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.42) !important;
+    background: #faf7f3 !important;
+    backdrop-filter: none;
+    border: 1px solid #d4cdc5 !important;
 }
 
 .dashboard-page .page-hero,
@@ -314,15 +266,11 @@ body.site-body.events-page {
 }
 
 .dashboard-page .page-hero {
-    background:
-        linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,255,255,0.84)),
-        url('/static/brand/dashboard-background.jpg') center/cover no-repeat;
+    background: #faf7f3;
 }
 
 .dashboard-page {
-    background:
-        linear-gradient(rgba(245,248,252,0.72), rgba(245,248,252,0.82)),
-        url('/static/brand/dashboard-background.jpg') center/cover fixed no-repeat;
+    background: #f5f0eb;
 }
 
 /* Compact dashboard rhythm: tighter cards, headings and scrolling tables so the
@@ -363,18 +311,11 @@ body.site-body.events-page {
 
 .quota-page .page-hero,
 .quota-page .quota-card,
-.quota-page .quota-tips-card {
-    background:
-        linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,255,255,0.84)),
-        url('/static/brand/quota-background.jpg') center/cover no-repeat;
-}
-
+.quota-page .quota-tips-card,
 .usage-page .page-hero,
 .usage-page .chart-card,
 .usage-page .panel-card {
-    background:
-        linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,255,255,0.84)),
-        url('/static/brand/usage-background.jpg') center/cover no-repeat;
+    background: #faf7f3;
 }
 
 .scroll-table {
