@@ -12,12 +12,12 @@ from django.views.decorators.http import require_http_methods, require_POST
 from core.attachments import save_attachments
 from core.forms import AnnouncementForm, DiscussionPostForm, DiscussionTopicForm
 from core.models import Announcement, Attachment, DiscussionPost, DiscussionTopic
-from core.utils import admin_required
+from core.utils import admin_required, is_portal_admin
 from core.version import portal_release_version
 
 
 def _is_admin(user):
-    return user.is_staff or getattr(getattr(user, "profile", None), "role", None) == "admin"
+    return is_portal_admin(user)
 
 
 def _topics():

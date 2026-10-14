@@ -23,7 +23,7 @@
 <div class="card panel-card"><div class="card-body">
     <div class="table-responsive soft-table-wrap">
         <table class="table soft-table align-middle">
-            <thead><tr><th>名称</th><th>摘要</th><th>状态</th><th>创建时间</th><th>最后使用</th></tr></thead>
+            <thead><tr><th>名称</th><th>摘要</th><th>状态</th><th>创建时间</th><th>最后使用</th><th>最近更新</th>{% if can_self_rotate %}<th></th>{% endif %}</tr></thead>
             <tbody>
             {% for key in keys %}
                 <tr>
@@ -32,9 +32,27 @@
                     <td><span class="badge text-bg-secondary">{{ key.get_status_display }}</span></td>
                     <td>{{ key.created_at|date:'Y-m-d H:i' }}</td>
                     <td>{{ key.last_used_at|date:'Y-m-d H:i'|default:'-' }}</td>
+                    <td>
+                        {% if key.token_rotated_at %}
+                            {{ key.token_rotated_at|date:'Y-m-d H:i' }}
+                        {% else %}
+                            {{ key.created_at|date:'Y-m-d H:i' }} <span class="text-muted">尚未轮换</span>
+                        {% endif %}
+                    </td>
+                    {% if can_self_rotate %}
+                    <td>
+                        {% if key.status == 'active' %}
+                        <form method="post" action="{% url 'rotate-my-api-key' key.id %}" onsubmit="return confirm('旧密钥会立即失效，正在使用旧密钥的程序会中断。确定更换？');">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="keys">
+                            <button class="btn btn-sm btn-outline-danger rounded-pill" type="submit" {% if rotate_blocked %}disabled{% endif %}>更换密钥</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                    {% endif %}
                 </tr>
             {% empty %}
-                <tr><td colspan="5" class="text-center text-muted">暂无 API Key</td></tr>
+                <tr><td colspan="{% if can_self_rotate %}7{% else %}6{% endif %}" class="text-center text-muted">暂无 API Key</td></tr>
             {% endfor %}
             </tbody>
         </table>

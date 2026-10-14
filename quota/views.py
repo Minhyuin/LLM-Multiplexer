@@ -7,6 +7,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from api_keys.models import APIKey
+from api_keys.rotation import self_rotate_state
 from quota.activity import personal_activity
 from quota.models import UserQuotaSnapshot
 from usage.models import UsageLog
@@ -69,4 +70,5 @@ def my_quota(request):
         "range_label": range_label,
         "usage_stats": usage_stats,
         "model_breakdown": model_breakdown,
+        **self_rotate_state(request.user),
     })

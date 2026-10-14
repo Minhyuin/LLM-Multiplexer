@@ -4,6 +4,7 @@ from api_keys import views
 
 urlpatterns = [
     path("my/", views.api_key_list, name="my-api-keys"),
+    path("my/<int:key_id>/rotate/", views.rotate_my_api_key, name="rotate-my-api-key"),
     path("request/", views.api_key_request_create, name="request-api-key"),
     path("admin/list/", views.admin_api_key_list, name="admin-api-key-list"),
     path("admin/create/<int:user_id>/", views.admin_api_key_create, name="admin-api-key-create"),

@@ -13,7 +13,7 @@
     <h3>全部 API Key</h3>
     <div class="table-responsive soft-table-wrap">
         <table class="table soft-table align-middle">
-            <thead><tr><th>用户</th><th>名称</th><th>摘要</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>用户</th><th>名称</th><th>摘要</th><th>状态</th><th>创建时间</th><th>最近更新</th><th>操作</th></tr></thead>
             <tbody>
             {% for key in keys %}
                 <tr>
@@ -22,6 +22,7 @@
                     <td><code>{{ key.token_masked }}</code></td>
                     <td>{{ key.get_status_display }}</td>
                     <td>{{ key.created_at|date:'Y-m-d H:i' }}</td>
+                    <td>{{ key.token_rotated_at|date:'Y-m-d H:i'|default:'-' }}</td>
                     <td><a class="btn btn-sm btn-soft" href="/keys/admin/{{ key.id }}/edit/">编辑</a></td>
                 </tr>
             {% endfor %}

@@ -1,4 +1,3 @@
-import random
 import re
 from pathlib import Path
 
@@ -6,17 +5,10 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from openpyxl import load_workbook
-from pypinyin import Style, lazy_pinyin
 
+from api_keys.member_tokens import IMPORT_KEY_RANDOM_LENGTH, build_account_name, generate_member_key
 from api_keys.models import APIKey
 from users.models import Profile
-
-
-PINYIN_MAP = {
-    "黄海": "HuangHai",
-    "薄汉博": "BoHanbo",
-    "黄沛玥": "HuangPeiyue",
-}
 
 
 def normalize_group(value):
@@ -37,24 +29,6 @@ def normalize_member_type(value):
     if value not in {Profile.MEMBER_CORE, Profile.MEMBER_RESERVE}:
         raise ValueError(f"未知队员身份: {value}")
     return value
-
-
-def build_account_name(name):
-    if name in PINYIN_MAP:
-        return PINYIN_MAP[name]
-    sanitized = re.sub(r"\s+", "", str(name or "").strip())
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", sanitized):
-        return sanitized
-    pinyin_parts = lazy_pinyin(sanitized, style=Style.NORMAL)
-    if not pinyin_parts:
-        raise ValueError(f"姓名 {name} 无法转换为拼音")
-    return "".join(part.capitalize() for part in pinyin_parts)
-
-
-def generate_cliproxy_key(account_name):
-    chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    prefix = "".join(random.choice(chars) for _ in range(7))
-    return f"sk-{prefix}{account_name}"
 
 
 class Command(BaseCommand):
@@ -113,7 +87,7 @@ class Command(BaseCommand):
                 profile.grade = grade
                 profile.save()
 
-                raw_key = generate_cliproxy_key(account_name)
+                raw_key = generate_member_key(account_name, IMPORT_KEY_RANDOM_LENGTH)
                 metadata = APIKey.build_token_metadata(raw_key)
                 APIKey.objects.create(
                     user=user,

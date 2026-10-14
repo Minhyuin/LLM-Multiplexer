@@ -1,19 +1,27 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.core.exceptions import PermissionDenied
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from api_keys.forms import APIKeyAdminForm, APIKeyRequestForm, APIKeyReviewForm
 from api_keys.models import APIKey, APIKeyRequest
-from core.utils import admin_required
+from api_keys.rotation import RotationError, rotate_member_key, self_rotate_state
+from core.utils import admin_required, is_portal_admin
 
 
 @login_required
 def api_key_list(request):
     keys = APIKey.objects.filter(user=request.user).order_by("-created_at")
     latest_plain_token = request.session.pop("latest_plain_token", None)
-    return render(request, "api_keys/my_keys.html", {"keys": keys, "latest_plain_token": latest_plain_token})
+    return render(request, "api_keys/my_keys.html", {
+        "keys": keys,
+        "latest_plain_token": latest_plain_token,
+        **self_rotate_state(request.user),
+    })
 
 
 @login_required
@@ -29,6 +37,25 @@ def api_key_request_create(request):
     else:
         form = APIKeyRequestForm()
     return render(request, "api_keys/request_key.html", {"form": form})
+
+
+@login_required
+@require_POST
+def rotate_my_api_key(request, key_id):
+    if is_portal_admin(request.user):
+        raise PermissionDenied("管理员请在用户编辑页更换密钥")
+    next_name = "my-api-keys" if request.POST.get("next") == "keys" else "my-quota"
+    try:
+        new_token = rotate_member_key(request.user, key_id)
+    except APIKey.DoesNotExist as exc:
+        raise Http404("密钥不存在") from exc
+    except RotationError as exc:
+        messages.error(request, str(exc))
+        return redirect(next_name)
+    if next_name == "my-api-keys":
+        request.session["latest_plain_token"] = new_token
+    messages.success(request, "密钥已更换，旧密钥立即失效。请马上复制新密钥。")
+    return redirect(next_name)
 
 
 @admin_required

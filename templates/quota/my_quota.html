@@ -154,10 +154,28 @@
                             <code>{{ key.token_plaintext|default:key.token_masked }}</code>
                         </div>
                     </div>
+                    <p class="text-muted mt-2 mb-1" style="font-size: 0.82rem;">
+                        最近更新
+                        {% if key.token_rotated_at %}
+                            {{ key.token_rotated_at|date:'Y-m-d H:i' }}
+                        {% else %}
+                            {{ key.created_at|date:'Y-m-d H:i' }}（尚未轮换）
+                        {% endif %}
+                    </p>
+                    {% if can_self_rotate %}
+                    <form method="post" action="{% url 'rotate-my-api-key' key.id %}" onsubmit="return confirm('旧密钥会立即失效，正在使用旧密钥的程序会中断。确定更换？');">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="quota">
+                        <button class="btn btn-sm btn-outline-danger rounded-pill" type="submit" {% if rotate_blocked %}disabled{% endif %}>更换密钥</button>
+                    </form>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
             <p class="text-muted mt-2 mb-0" style="font-size: 0.82rem;"><i class="bi bi-info-circle me-1"></i>点击信息框可快速复制</p>
+            {% if can_self_rotate %}
+            <p class="text-muted mt-1 mb-0" style="font-size: 0.82rem;">怀疑密钥泄露时可以更换。系统会自动分配新密钥，旧密钥立即失效。{% if rotate_blocked %}10 分钟内只能更换一次。{% endif %}</p>
+            {% endif %}
         </div></div>
     </div>
 </div>

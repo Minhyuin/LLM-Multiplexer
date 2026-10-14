@@ -36,6 +36,7 @@ class APIKey(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
+    token_rotated_at = models.DateTimeField(null=True, blank=True)
     note = models.TextField(blank=True)
 
     class Meta:

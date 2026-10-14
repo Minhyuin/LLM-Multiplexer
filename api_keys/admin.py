@@ -5,7 +5,7 @@ from api_keys.models import APIKey, APIKeyRequest
 
 @admin.register(APIKey)
 class APIKeyAdmin(admin.ModelAdmin):
-    list_display = ("name", "user", "token_masked", "status", "created_at", "last_used_at")
+    list_display = ("name", "user", "token_masked", "status", "created_at", "token_rotated_at", "last_used_at")
     search_fields = ("name", "user__username", "token_prefix", "token_masked")
     list_filter = ("status", "created_at")
 
