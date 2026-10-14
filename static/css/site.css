@@ -1056,7 +1056,7 @@ select:focus-visible {
 
 /* ===== Query trace (admin leak triage) ===== */
 .query-trace-excerpt {
-    max-width: 460px;
+    max-width: 280px;
     color: var(--text-main);
     overflow-wrap: anywhere;
 }

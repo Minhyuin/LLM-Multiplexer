@@ -19,6 +19,10 @@
     </div>
 {% endif %}
 
+{% if key_filter_unknown %}
+    <div class="alert alert-warning" role="alert">Key 筛选参数无效或对应历史记录已清理，请重新选择 Key。</div>
+{% endif %}
+
 <section class="card panel-card mb-3">
     <div class="card-body">
         <div class="d-flex flex-wrap align-items-center gap-2">
@@ -29,6 +33,10 @@
             <a class="btn btn-sm btn-soft {% if range_name == 'all' %}active{% endif %}" href="?range=all{{ filter_suffix }}">全部</a>
             <form method="get" class="d-flex flex-wrap align-items-center gap-2">
                 <input type="hidden" name="range" value="custom">
+                <input type="hidden" name="user" value="{{ selected_user }}">
+                <input type="hidden" name="model" value="{{ selected_model }}">
+                <input type="hidden" name="key" value="{{ selected_key }}">
+                <input type="hidden" name="q" value="{{ keyword }}">
                 <input type="date" name="start" value="{{ start }}" class="form-control form-control-sm">
                 <span class="text-muted">~</span>
                 <input type="date" name="end" value="{{ end }}" class="form-control form-control-sm">
@@ -54,10 +62,16 @@
                     <option value="{{ model_name }}" {% if selected_model == model_name %}selected{% endif %}>{{ model_name }}</option>
                 {% endfor %}
             </select>
+            <select name="key" aria-label="按 Key 筛选" class="form-select form-select-sm" style="max-width: 200px;">
+                <option value="">全部历史 Key</option>
+                {% for option in key_options %}
+                    <option value="{{ option.value }}" {% if selected_key == option.value %}selected{% endif %}>{{ option.label }}{% if option.ordinal %} · #{{ option.ordinal }}{% endif %}</option>
+                {% endfor %}
+            </select>
             <input type="search" name="q" value="{{ keyword }}" class="form-control form-control-sm" style="max-width: 280px;" placeholder="关键词（提问内容 / 成员）">
             <button class="btn btn-sm btn-primary rounded-pill px-3" type="submit">筛选</button>
-            {% if selected_user or selected_model or keyword %}
-                <a class="btn btn-sm btn-soft" href="?range={{ range_name }}">清除</a>
+            {% if selected_user or selected_model or selected_key or keyword %}
+                <a class="btn btn-sm btn-soft" href="?range={{ range_name }}{% if range_name == 'custom' %}&amp;start={{ start|urlencode }}&amp;end={{ end|urlencode }}{% endif %}">清除</a>
             {% endif %}
         </form>
     </div>
@@ -79,6 +93,7 @@
                     <tr>
                         <th>时间</th>
                         <th>成员</th>
+                        <th>Key</th>
                         <th>模型</th>
                         <th>提问内容</th>
                         <th class="text-end">字符</th>
@@ -91,8 +106,9 @@
                     <tr>
                         <td class="text-nowrap">{{ trace.request_time|date:'m-d H:i' }}</td>
                         <td>{{ trace.user_identifier|default:'-' }}</td>
+                        <td class="text-nowrap font-monospace">{{ trace.api_key_identifier|key_suffix:4 }}</td>
                         <td>{{ trace.model_name|default:'-' }}</td>
-                        <td class="query-trace-excerpt">{{ trace.query_text|truncatechars:140 }}</td>
+                        <td class="query-trace-excerpt">{{ trace.query_text|truncatechars:60 }}</td>
                         <td class="text-end">{{ trace.query_chars }}</td>
                         <td>
                             {% if trace.truncated %}<span class="badge text-bg-warning">截断</span>{% endif %}
@@ -104,7 +120,7 @@
                         </td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="7" class="text-center text-muted">当前筛选范围内没有追溯记录</td></tr>
+                    <tr><td colspan="8" class="text-center text-muted">当前筛选范围内没有追溯记录</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

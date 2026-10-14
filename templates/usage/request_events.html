@@ -99,11 +99,7 @@
                     {% endif %}
                 </td>
                 <td class="ev-cell-key">
-                    {% if is_admin %}
-                        {{ log.api_key_identifier|default:"-"|truncatechars:18 }}
-                    {% else %}
-                        {% if log.api_key_identifier %}sk-***{{ log.api_key_identifier|slice:"-4:" }}{% else %}-{% endif %}
-                    {% endif %}
+                    {{ log.api_key_identifier|key_suffix:10 }}
                 </td>
                 <td><span class="ev-provider-badge">{{ log.provider|default:"-" }}</span></td>
                 <td class="ev-cell-model">{{ log.model_name }}</td>

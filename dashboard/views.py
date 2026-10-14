@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -8,6 +9,7 @@ from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 
+from core.key_identifiers import key_index, key_suffix
 from core.utils import admin_required
 from dashboard.forms import ModelPricingForm
 from dashboard.models import ModelPricing
@@ -685,7 +687,19 @@ QUERY_TRACE_PAGE_SIZE = 25
 QUERY_TRACE_SOURCE_NAME = "cliproxy-request-log"
 
 
-def _query_trace_filters(request):
+def _query_trace_key_index():
+    # Historical identifiers survive deleted/revoked key rows. Clear model ordering
+    # before DISTINCT so timestamps do not create duplicate options.
+    identifiers = set()
+    for model in (QueryTrace, UsageLog):
+        identifiers.update(
+            model.objects.exclude(api_key_identifier="")
+            .order_by().values_list("api_key_identifier", flat=True).distinct()
+        )
+    return {key_index(identifier): identifier for identifier in sorted(identifiers)}
+
+
+def _query_trace_filters(request, key_identifiers):
     range_name = request.GET.get("range", "last_7_days")
     start, end = _get_range_start(range_name, request)
     queryset = QueryTrace.objects.select_related("user")
@@ -700,6 +714,10 @@ def _query_trace_filters(request):
     model_name = (request.GET.get("model") or "").strip()
     if model_name:
         queryset = queryset.filter(model_name=model_name)
+    selected_key = (request.GET.get("key") or "").strip()
+    if selected_key:
+        identifier = key_identifiers.get(selected_key)
+        queryset = queryset.filter(api_key_identifier=identifier) if identifier is not None else queryset.none()
     keyword = (request.GET.get("q") or "").strip()
     if keyword:
         queryset = queryset.filter(Q(query_text__icontains=keyword) | Q(user_identifier__icontains=keyword))
@@ -708,6 +726,8 @@ def _query_trace_filters(request):
         "range_name": range_name,
         "selected_user": user_id,
         "selected_model": model_name,
+        "selected_key": selected_key,
+        "key_filter_unknown": bool(selected_key and selected_key not in key_identifiers),
         "keyword": keyword,
         "start": request.GET.get("start", ""),
         "end": request.GET.get("end", ""),
@@ -717,7 +737,14 @@ def _query_trace_filters(request):
 @admin_required
 def query_trace_list(request):
     """Admin view: the concrete query behind each recent request (leak tracing)."""
-    queryset, filters = _query_trace_filters(request)
+    key_identifiers = _query_trace_key_index()
+    # Suffix collisions get a separate ordinal, while the key itself stays <=5 characters.
+    labels = Counter(key_suffix(identifier) for identifier in key_identifiers.values())
+    key_options = [
+        {"value": value, "label": key_suffix(identifier), "ordinal": position if labels[key_suffix(identifier)] > 1 else None}
+        for position, (value, identifier) in enumerate(key_identifiers.items(), start=1)
+    ]
+    queryset, filters = _query_trace_filters(request, key_identifiers)
     paginator = Paginator(queryset, QUERY_TRACE_PAGE_SIZE)
     page = paginator.get_page(request.GET.get("page"))
 
@@ -739,6 +766,8 @@ def query_trace_list(request):
         filter_params.append(("user", filters["selected_user"]))
     if filters["selected_model"]:
         filter_params.append(("model", filters["selected_model"]))
+    if filters["selected_key"]:
+        filter_params.append(("key", filters["selected_key"]))
     if filters["keyword"]:
         filter_params.append(("q", filters["keyword"]))
     if filters["range_name"] == "custom":
@@ -753,6 +782,7 @@ def query_trace_list(request):
         "total_count": paginator.count,
         "user_options": list(user_options),
         "model_options": list(model_options),
+        "key_options": key_options,
         "last_job": UsageImportJob.objects.filter(source_name=QUERY_TRACE_SOURCE_NAME).first(),
         "trace_enabled": settings.QUERY_TRACE_ENABLED,
         "store_mode": settings.QUERY_TRACE_STORE_MODE,

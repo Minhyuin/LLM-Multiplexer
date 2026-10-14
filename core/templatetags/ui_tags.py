@@ -4,9 +4,11 @@ from django import template
 from django.utils import formats
 
 from core.attachments import human_size
+from core.key_identifiers import key_suffix
 
 
 register = template.Library()
+register.filter("key_suffix", key_suffix)
 
 
 GROUP_EMOJI = {

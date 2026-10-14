@@ -30,7 +30,7 @@
             <table class="table table-sm soft-table align-middle mb-0 query-trace-meta">
                 <tbody>
                     <tr><th>成员</th><td>{{ trace.user_identifier|default:'-' }}{% if trace.user %} <span class="text-muted small">({{ trace.user.username }})</span>{% endif %}</td></tr>
-                    <tr><th>密钥</th><td>{{ trace.api_key_identifier|default:'-' }}</td></tr>
+                    <tr><th>密钥</th><td>{{ trace.api_key_identifier|key_suffix:4 }}</td></tr>
                     <tr><th>模型</th><td>{{ trace.model_name|default:'-' }}</td></tr>
                     <tr><th>端点</th><td>{{ trace.endpoint|default:'-' }}</td></tr>
                     <tr><th>消息条数</th><td>{{ trace.message_count }}</td></tr>
