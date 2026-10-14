@@ -69,6 +69,30 @@ class APIKey(models.Model):
         return True
 
 
+class APIKeyAlias(models.Model):
+    """Historical key kept alive for usage attribution after a rotation.
+
+    When an admin rebinds a user's key the old row is overwritten in place, so
+    usage events still authenticating with the old key can no longer be matched
+    against ``APIKey``. A rotation therefore records the previous key here, and
+    the usage importer resolves identifiers through these aliases as a fallback.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="key_aliases")
+    token_hash = models.CharField(max_length=64, unique=True)
+    token_prefix = models.CharField(max_length=24, blank=True, db_index=True)
+    token_masked = models.CharField(max_length=32, blank=True)
+    token_plaintext = models.CharField(max_length=255, blank=True)
+    note = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} - 旧密钥别名 {self.token_masked}"
+
+
 class APIKeyRequest(models.Model):
     STATUS_PENDING = "pending"
     STATUS_APPROVED = "approved"

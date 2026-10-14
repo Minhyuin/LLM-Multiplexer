@@ -4,13 +4,19 @@ from django.contrib.auth.models import User
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from api_keys.models import APIKey
+import logging
+
+from api_keys.cpa_sync import push_key_rotation_to_cliproxy
+from api_keys.models import APIKey, APIKeyAlias
 from core.utils import admin_required
 from quota.models import UserQuotaSnapshot
 from django.db.models import Sum
 from users.models import Profile
+
+logger = logging.getLogger(__name__)
 
 from users.forms import AdminProfileQuotaForm, AdminUserBoundKeyForm, AdminUserKeyOnlyForm, AdminUserPasswordForm, AdminUserWithCliproxyKeyForm, ProfileForm
 from users.middleware import get_real_user, is_portal_admin, start_view_as, stop_view_as
@@ -80,6 +86,16 @@ def admin_user_list(request):
 def admin_user_edit(request, user_id):
     target_user = get_object_or_404(User.objects.select_related("profile"), pk=user_id)
     bound_key = target_user.api_keys.order_by("-created_at").first()
+    # ModelForm.is_valid() (via _post_clean -> construct_instance) copies the
+    # submitted plaintext onto bound_key, so the old identifiers must be
+    # captured before any form validation runs.
+    if bound_key:
+        old_plaintext = bound_key.token_plaintext or ""
+        old_token_hash = bound_key.token_hash
+        old_token_prefix = bound_key.token_prefix
+        old_token_masked = bound_key.token_masked
+    else:
+        old_plaintext = old_token_hash = old_token_prefix = old_token_masked = ""
     if request.method == "POST":
         form = AdminProfileQuotaForm(request.POST, instance=target_user.profile, prefix="profile", user_instance=target_user)
         password_form = AdminUserPasswordForm(request.POST, prefix="password")
@@ -89,13 +105,36 @@ def admin_user_edit(request, user_id):
             messages.success(request, "用户信息已更新")
             return redirect("admin-user-list")
         if "save_key" in request.POST and key_form.is_valid() and bound_key:
-            key = key_form.save(commit=False)
-            metadata = APIKey.build_token_metadata(key_form.cleaned_data["token_plaintext"])
-            key.token_hash = metadata["token_hash"]
-            key.token_prefix = metadata["token_prefix"]
-            key.token_masked = metadata["token_masked"]
-            key.save()
+            new_plaintext = key_form.cleaned_data["token_plaintext"]
+            with transaction.atomic():
+                if old_plaintext and old_plaintext != new_plaintext:
+                    # Rotation: keep the outgoing key attributable as an alias.
+                    APIKeyAlias.objects.get_or_create(
+                        token_hash=old_token_hash,
+                        defaults={
+                            "user": target_user,
+                            "token_prefix": old_token_prefix,
+                            "token_masked": old_token_masked,
+                            "token_plaintext": old_plaintext,
+                            "note": "轮换前密钥，轮换于 " + timezone.now().strftime("%Y-%m-%d %H:%M"),
+                        },
+                    )
+                key = key_form.save(commit=False)
+                metadata = APIKey.build_token_metadata(new_plaintext)
+                key.token_hash = metadata["token_hash"]
+                key.token_prefix = metadata["token_prefix"]
+                key.token_masked = metadata["token_masked"]
+                key.save()
             messages.success(request, "绑定密钥已更新")
+            if new_plaintext != old_plaintext:
+                # Best-effort: the panel save must never fail because CPA is
+                # unreachable — surface the sync failure as a warning instead.
+                try:
+                    push_key_rotation_to_cliproxy(old_plaintext, new_plaintext)
+                    messages.success(request, "CPA 密钥已同步")
+                except Exception as exc:
+                    logger.error("CPA key sync failed for user %s: %s", target_user.username, exc)
+                    messages.warning(request, f"面板已保存，但同步 CPA 失败，需要手动处理：{exc}")
             return redirect("admin-user-list")
         if "save_password" in request.POST and password_form.is_valid():
             target_user.set_password(password_form.cleaned_data["new_password"])
