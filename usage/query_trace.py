@@ -329,10 +329,10 @@ def _attribution_from_keeper_events(keeper_events):
     return mapping
 
 
-def _attribution_from_recent_logs(days=None):
+def _attribution_from_recent_logs(days=None, since=None):
     """Fallback attribution for logs whose keeper event was imported earlier."""
     days = days or _setting_int("QUERY_TRACE_ATTRIBUTION_DAYS", 3)
-    window_start = django_timezone.now() - timedelta(days=days)
+    window_start = since or (django_timezone.now() - timedelta(days=days))
     mapping = {}
     rows = (
         UsageLog.objects.filter(request_time__gte=window_start)
@@ -361,6 +361,55 @@ def _fallback_attribution(short_id: str, request_time):
         .select_related("user", "api_key")
         .first()
     )
+
+
+def reattribute_query_traces(since=None, limit=2000):
+    """Give traces a second chance at attribution.
+
+    A request log is written the moment the proxy answers, while the matching usage
+    row only lands minutes later with the keeper sync, so a trace is often stored
+    unattributed first. Re-checking the still-unattributed rows inside the
+    attribution window is what keeps those requests traceable to a member.
+    """
+    window_start = since or (
+        django_timezone.now() - timedelta(days=_setting_int("QUERY_TRACE_ATTRIBUTION_DAYS", 3))
+    )
+    pending = list(
+        QueryTrace.objects.filter(user__isnull=True, request_time__gte=window_start)
+        .order_by("-request_time")[: int(limit)]
+    )
+    if not pending:
+        return 0
+
+    attribution = _attribution_from_recent_logs(since=window_start)
+    fixed = 0
+    for trace in pending:
+        usage_log = attribution.get(trace.short_id) or _fallback_attribution(trace.short_id, trace.request_time)
+        if usage_log is None:
+            continue
+        api_key = getattr(usage_log, "api_key", None)
+        if api_key is None and usage_log.user_id:
+            api_key = APIKey.objects.filter(user=usage_log.user).order_by("id").first()
+        trace.request_id = usage_log.request_id
+        trace.upstream_request_id = str((usage_log.raw_payload or {}).get("upstream_request_id") or "")
+        trace.user = usage_log.user
+        trace.api_key = api_key
+        trace.user_identifier = (
+            usage_log.user.username if usage_log.user else usage_log.user_identifier
+        )[:150]
+        trace.api_key_identifier = (
+            usage_log.api_key_identifier
+            or getattr(api_key, "token_masked", "")
+            or getattr(api_key, "token_prefix", "")
+        )[:150]
+        if not trace.model_name:
+            trace.model_name = usage_log.model_name
+        trace.save(update_fields=[
+            "request_id", "upstream_request_id", "user", "api_key",
+            "user_identifier", "api_key_identifier", "model_name",
+        ])
+        fixed += 1
+    return fixed
 
 
 def prune_query_traces(max_rows=None, max_age_days=None):
@@ -413,9 +462,10 @@ def sync_query_traces(keeper_events=None, limit=None, dry_run=False, prune=True)
             QueryTrace.objects.filter(short_id__in=short_ids[index:index + 500]).values_list("short_id", flat=True)
         )
 
-    attribution = _attribution_from_keeper_events(keeper_events)
-    if not attribution:
-        attribution = _attribution_from_recent_logs()
+    # the keeper events imported by this run are the freshest source, but a usage row
+    # that arrived earlier still has to be usable: merge instead of picking one
+    attribution = _attribution_from_recent_logs(since=since)
+    attribution.update(_attribution_from_keeper_events(keeper_events))
 
     max_file_bytes = _setting_int("QUERY_TRACE_MAX_FILE_BYTES", 4 * 1024 * 1024)
     created = []
@@ -493,12 +543,18 @@ def sync_query_traces(keeper_events=None, limit=None, dry_run=False, prune=True)
     if prune and not dry_run:
         deleted_expired, deleted_overflow = prune_query_traces()
 
+    reattributed = 0
+    if not dry_run:
+        reattributed = reattribute_query_traces(since=since)
+
     job.imported_count = imported
     job.skipped_count = skipped
     job.failed_count = failed
     summary_lines = []
     if unattributed:
         summary_lines.append(f"unattributed={unattributed}")
+    if reattributed:
+        summary_lines.append(f"reattributed={reattributed}")
     if deleted_expired or deleted_overflow:
         summary_lines.append(f"pruned: expired={deleted_expired} overflow={deleted_overflow}")
     if dry_run:

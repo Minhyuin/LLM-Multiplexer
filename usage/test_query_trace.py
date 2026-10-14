@@ -272,6 +272,28 @@ class SyncQueryTraceTests(TestCase):
         self.assertIn("没有对应用量", trace.query_text)
         self.assertIn("unattributed=1", job.summary)
 
+    def test_late_usage_row_reattributes_an_older_trace(self):
+        """The usage row lands after the log file, so a later run must fix the trace."""
+        upstream_id = "01a13955-b0a7-7235-9f59-e31886e3e1b7"
+        short_id = short_id_for_request_id(upstream_id)
+        write_log(self.directory.name, short_id=short_id, when=timezone.now(), body=chat_body("迟到归因"))
+
+        first = sync_query_traces()
+        self.assertIsNone(QueryTrace.objects.get(short_id=short_id).user)
+        self.assertIn("unattributed=1", first.summary)
+
+        self._usage_log(upstream_id)
+        second = sync_query_traces()
+
+        trace = QueryTrace.objects.get(short_id=short_id)
+        self.assertEqual(trace.user, self.user)
+        self.assertEqual(trace.api_key, self.api_key)
+        self.assertEqual(trace.request_id, "keeper-900001")
+        self.assertEqual(trace.user_identifier, self.user.username)
+        self.assertEqual(trace.api_key_identifier, "sk-trace")
+        self.assertIn("reattributed=1", second.summary)
+        self.assertEqual(second.imported_count, 0)
+
     def test_management_command_reports_counts(self):
         write_log(self.directory.name, short_id="cafebabe", when=timezone.now(), body=chat_body("命令行导入"))
 
