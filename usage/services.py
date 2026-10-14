@@ -16,12 +16,12 @@ import requests
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import DatabaseError, NotSupportedError, connection, connections, transaction
-from django.db.models import BooleanField, Count, F, Func, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models import BooleanField, Count, F, Func, IntegerField, Max, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import TruncDate, TruncHour, TruncMonth
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from api_keys.models import APIKey
+from api_keys.models import APIKey, APIKeyAlias
 from dashboard.models import ModelPricing
 from usage.models import UsageImportJob, UsageLog
 
@@ -132,13 +132,50 @@ def resolve_related_objects(data):
         ).select_related("user").first()
         if api_key and not user:
             user = api_key.user
+        if not api_key:
+            # Rotated keys: the identifier no longer matches any APIKey row,
+            # but an APIKeyAlias still maps it back to its owner. Attribute to
+            # the owner's current key so per-key panels keep one row per user.
+            alias = APIKeyAlias.objects.filter(
+                Q(token_hash=APIKey.hash_token(token_value))
+                | Q(token_prefix__iexact=token_value)
+                | Q(token_masked__iexact=token_value)
+            ).select_related("user").first()
+            if alias:
+                user = alias.user
+                api_key = alias.user.api_keys.order_by("-created_at").first()
     return user, api_key
+
+
+def _refresh_api_keys_last_used(api_key_ids):
+    """Backfill ``APIKey.last_used_at`` for the keys an import job touched.
+
+    One aggregate query plus at most one UPDATE per key (never per usage row);
+    the value is the max request_time across that key's logs, so backfills and
+    live imports agree and the timestamp never moves backwards.
+    """
+    ids = {key_id for key_id in api_key_ids if key_id}
+    if not ids:
+        return
+    latest_by_key = {
+        row["api_key_id"]: row["latest"]
+        for row in UsageLog.objects.filter(api_key_id__in=ids)
+        .values("api_key_id")
+        .annotate(latest=Max("request_time"))
+    }
+    for key_id, latest in latest_by_key.items():
+        if latest is None:
+            continue
+        APIKey.objects.filter(
+            Q(pk=key_id) & (Q(last_used_at__isnull=True) | Q(last_used_at__lt=latest))
+        ).update(last_used_at=latest)
 
 
 def import_usage_records(records, source_type, source_name):
     job = UsageImportJob.objects.create(source_type=source_type, source_name=source_name)
     imported = skipped = failed = 0
     errors = []
+    touched_api_key_ids = set()
 
     # Quick pre-filter: extract request_ids first (cheap) and batch check existence
     raw_request_ids = []
@@ -177,18 +214,23 @@ def import_usage_records(records, source_type, source_name):
                         update_fields.append("api_key")
                     if update_fields:
                         existing.save(update_fields=update_fields)
+                        if api_key:
+                            touched_api_key_ids.add(api_key.pk)
                 skipped += 1
                 continue
             # Only do expensive normalization for new records
             data = normalize_usage_record(raw)
             user, api_key = resolve_related_objects(data)
             UsageLog.objects.create(**data, user=user, api_key=api_key)
+            if api_key:
+                touched_api_key_ids.add(api_key.pk)
             existing_ids.add(rid)  # Prevent duplicates within same batch
             imported += 1
         except Exception as exc:
             failed += 1
             errors.append(f"第 {index} 行导入失败: {exc}")
 
+    _refresh_api_keys_last_used(touched_api_key_ids)
     job.imported_count = imported
     job.skipped_count = skipped
     job.failed_count = failed
@@ -416,6 +458,14 @@ def _resolve_keeper_api_key(event):
         ).select_related("user").first()
         if api_key:
             return api_key
+        # Rotated keys authenticate with a plaintext that no APIKey row carries
+        # any more; an APIKeyAlias still owns it, so attribute to the owner's
+        # current key (same fallback resolve_related_objects uses).
+        alias = APIKeyAlias.objects.filter(
+            Q(token_plaintext=full_key) | Q(token_hash=APIKey.hash_token(full_key))
+        ).select_related("user").first()
+        if alias:
+            return alias.user.api_keys.order_by("-created_at").first()
 
     key_hash = (event.get("api_key_hash") or "").strip()
     key_prefix = (event.get("api_key_prefix") or "").strip()
@@ -448,6 +498,7 @@ def import_keeper_usage_events(events, source_name="cpa-usage-keeper"):
     job = UsageImportJob.objects.create(source_type=UsageImportJob.SOURCE_API, source_name=source_name)
     imported = skipped = failed = unmatched = 0
     errors = []
+    touched_api_key_ids = set()
 
     raw_ids = [f"keeper-{event.get('id')}" for event in events if event.get("id")]
     existing_ids = set()
@@ -523,11 +574,14 @@ def import_keeper_usage_events(events, source_name="cpa-usage-keeper"):
                 provider=str(event.get("provider") or event.get("source_type") or "").strip(),
             )
             existing_ids.add(rid)
+            if api_key:
+                touched_api_key_ids.add(api_key.pk)
             imported += 1
         except Exception as exc:
             failed += 1
             errors.append(f"第 {index} 条 keeper 事件导入失败: {exc}")
 
+    _refresh_api_keys_last_used(touched_api_key_ids)
     job.imported_count = imported
     job.skipped_count = skipped
     job.failed_count = failed
@@ -538,10 +592,58 @@ def import_keeper_usage_events(events, source_name="cpa-usage-keeper"):
     return job
 
 
+def _known_key_identifier_sets():
+    """(plaintexts, hashes, prefixes) of every key the portal manages.
+
+    Current APIKeys plus rotated APIKeyAliases, so usage from an old key is not
+    mistaken for an external key by the import filters.
+    """
+    known_plaintexts = set(
+        APIKey.objects.exclude(token_plaintext="").values_list("token_plaintext", flat=True)
+    )
+    known_hashes = set(APIKey.objects.values_list("token_hash", flat=True))
+    known_prefixes = set(
+        APIKey.objects.exclude(token_prefix="").values_list("token_prefix", flat=True)
+    )
+    known_plaintexts.update(
+        APIKeyAlias.objects.exclude(token_plaintext="").values_list("token_plaintext", flat=True)
+    )
+    known_prefixes.update(
+        APIKeyAlias.objects.exclude(token_prefix="").values_list("token_prefix", flat=True)
+    )
+    return known_plaintexts, known_hashes, known_prefixes
+
+
+def _is_known_key_identifier(key_id, known_plaintexts, known_hashes, known_prefixes):
+    """Same known-key rule as the management-API sync: True when importable."""
+    key_id = (key_id or "").strip()
+    if not key_id:
+        return True  # no identifier: keep, user_identifier may still attribute it
+    if key_id in known_plaintexts:
+        return True
+    if APIKey.hash_token(key_id) in known_hashes:
+        return True
+    if key_id[:12] in known_prefixes:
+        return True
+    return False
+
+
 def sync_keeper_usage_records(limit=KEEPER_DB_SYNC_BATCH):
     """Sync from the local keeper database when present, else the HTTP API."""
     if keeper_db_available():
         events = fetch_keeper_events_sqlite(since_id=latest_keeper_event_id(), limit=limit)
+        # Keeper events carry the caller's full key. Import only keys the portal
+        # manages (current or rotated alias), aligned with the management-API
+        # sync; external/outsourced keys are skipped instead of landing as
+        # unattributed rows.
+        known_plaintexts, known_hashes, known_prefixes = _known_key_identifier_sets()
+        events = [
+            event for event in events
+            if _is_known_key_identifier(
+                event.get("api_group_key") or event.get("api_key"),
+                known_plaintexts, known_hashes, known_prefixes,
+            )
+        ]
         return import_keeper_usage_events(events, source_name="cpa-usage-keeper-db")
     events = fetch_keeper_usage_events()
     return import_keeper_usage_events(events)
@@ -567,15 +669,8 @@ def sync_cliproxy_usage_records():
 
     # Only import records whose api_key_identifier matches a key bound in the portal.
     # This filters out usage from external/outsourced keys not managed here.
-    known_plaintexts = set(
-        APIKey.objects.exclude(token_plaintext="").values_list("token_plaintext", flat=True)
-    )
-    known_hashes = set(
-        APIKey.objects.values_list("token_hash", flat=True)
-    )
-    known_prefixes = set(
-        APIKey.objects.exclude(token_prefix="").values_list("token_prefix", flat=True)
-    )
+    # Rotated aliases count as managed keys, so old-key records survive the filter.
+    known_plaintexts, known_hashes, known_prefixes = _known_key_identifier_sets()
 
     filtered = []
     for record in records:
@@ -605,6 +700,7 @@ def sync_cliproxy_usage_queue_records(count=10000):
     job = UsageImportJob.objects.create(source_type=UsageImportJob.SOURCE_API, source_name="cliproxy-usage-queue")
     imported = skipped = failed = 0
     errors = []
+    touched_api_key_ids = set()
 
     raw_ids = [str(event.get("request_id") or "").strip() for event in events if event.get("request_id")]
     existing_ids = set()
@@ -626,12 +722,15 @@ def sync_cliproxy_usage_queue_records(count=10000):
             data = normalize_queue_event(event)
             user, api_key = resolve_related_objects(data)
             UsageLog.objects.create(**data, user=user, api_key=api_key)
+            if api_key:
+                touched_api_key_ids.add(api_key.pk)
             existing_ids.add(rid)
             imported += 1
         except Exception as exc:
             failed += 1
             errors.append(f"第 {index} 条队列事件导入失败: {exc}")
 
+    _refresh_api_keys_last_used(touched_api_key_ids)
     job.imported_count = imported
     job.skipped_count = skipped
     job.failed_count = failed
