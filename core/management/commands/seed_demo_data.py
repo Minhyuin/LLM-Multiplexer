@@ -3,7 +3,8 @@ from decimal import Decimal
 import random
 
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from api_keys.models import APIKey, APIKeyRequest
@@ -17,6 +18,8 @@ class Command(BaseCommand):
     help = "生成演示用户、Key、Usage 和额度快照"
 
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError("Demo data generation is disabled in production")
         User = get_user_model()
         admin, _ = User.objects.get_or_create(
             username="admin",
