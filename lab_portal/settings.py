@@ -125,6 +125,21 @@ CLIPROXY_BASE_URL = os.getenv("CLIPROXY_BASE_URL", "http://154.201.92.23")
 CLIPROXY_MANAGEMENT_BASE_URL = os.getenv("CLIPROXY_MANAGEMENT_BASE_URL", "http://154.201.92.23:8317")
 CLIPROXY_MANAGEMENT_KEY = os.getenv("CLIPROXY_MANAGEMENT_KEY", "")
 
+# --- Query tracing (leak security) ---
+# The proxy writes one log file per request when its own config has
+# ``request-log: true``; the portal reads those files, keeps the final user
+# message, and prunes FIFO so storage stays bounded.
+QUERY_TRACE_ENABLED = env_bool("QUERY_TRACE_ENABLED", True)
+QUERY_TRACE_LOG_DIR = os.getenv("QUERY_TRACE_LOG_DIR", "/root/cliproxyapi/logs")
+QUERY_TRACE_STORE_MODE = os.getenv("QUERY_TRACE_STORE_MODE", "query")  # query | body
+QUERY_TRACE_MAX_CHARS = int(os.getenv("QUERY_TRACE_MAX_CHARS", 20000))
+QUERY_TRACE_MAX_ROWS = int(os.getenv("QUERY_TRACE_MAX_ROWS", 50000))
+QUERY_TRACE_MAX_AGE_DAYS = int(os.getenv("QUERY_TRACE_MAX_AGE_DAYS", 30))
+QUERY_TRACE_MAX_FILE_BYTES = int(os.getenv("QUERY_TRACE_MAX_FILE_BYTES", 4 * 1024 * 1024))
+QUERY_TRACE_BACKFILL_HOURS = int(os.getenv("QUERY_TRACE_BACKFILL_HOURS", 24))
+QUERY_TRACE_SCAN_LIMIT = int(os.getenv("QUERY_TRACE_SCAN_LIMIT", 500))
+QUERY_TRACE_ATTRIBUTION_DAYS = int(os.getenv("QUERY_TRACE_ATTRIBUTION_DAYS", 3))
+
 # --- Security settings (production) ---
 if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True

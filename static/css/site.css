@@ -1053,3 +1053,40 @@ select:focus-visible {
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(148, 163, 184, 0.5);
 }
+
+/* ===== Query trace (admin leak triage) ===== */
+.query-trace-excerpt {
+    max-width: 460px;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
+
+.query-trace-body {
+    margin-bottom: 0;
+    padding: 0.9rem 1rem;
+    max-height: 420px;
+    overflow: auto;
+    background: #f8fbff;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 16px;
+    font-size: 0.86rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* metadata table: long log file names and endpoints must break instead of widening the page */
+.query-trace-meta th {
+    white-space: nowrap;
+}
+
+.query-trace-meta td {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 575.98px) {
+    .query-trace-body {
+        max-height: 320px;
+        font-size: 0.8rem;
+    }
+}

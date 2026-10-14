@@ -1,15 +1,17 @@
 from datetime import timedelta
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.db.models import Sum
-from django.shortcuts import render
+from django.core.paginator import Paginator
+from django.db.models import Q, Sum
+from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 
 from core.utils import admin_required
 from dashboard.forms import ModelPricingForm
 from dashboard.models import ModelPricing
-from usage.models import UsageLog
+from usage.models import QueryTrace, UsageImportJob, UsageLog
 from usage.services import aggregate_dashboard
 
 
@@ -677,3 +679,104 @@ def admin_credentials_health(request):
         })
 
     return JsonResponse({"ok": True, "credentials": credentials})
+
+
+QUERY_TRACE_PAGE_SIZE = 25
+QUERY_TRACE_SOURCE_NAME = "cliproxy-request-log"
+
+
+def _query_trace_filters(request):
+    range_name = request.GET.get("range", "last_7_days")
+    start, end = _get_range_start(range_name, request)
+    queryset = QueryTrace.objects.select_related("user")
+    if start:
+        queryset = queryset.filter(request_time__gte=start)
+    if end:
+        queryset = queryset.filter(request_time__lte=end)
+
+    user_id = (request.GET.get("user") or "").strip()
+    if user_id.isdigit():
+        queryset = queryset.filter(user_id=int(user_id))
+    model_name = (request.GET.get("model") or "").strip()
+    if model_name:
+        queryset = queryset.filter(model_name=model_name)
+    keyword = (request.GET.get("q") or "").strip()
+    if keyword:
+        queryset = queryset.filter(Q(query_text__icontains=keyword) | Q(user_identifier__icontains=keyword))
+
+    return queryset, {
+        "range_name": range_name,
+        "selected_user": user_id,
+        "selected_model": model_name,
+        "keyword": keyword,
+        "start": request.GET.get("start", ""),
+        "end": request.GET.get("end", ""),
+    }
+
+
+@admin_required
+def query_trace_list(request):
+    """Admin view: the concrete query behind each recent request (leak tracing)."""
+    queryset, filters = _query_trace_filters(request)
+    paginator = Paginator(queryset, QUERY_TRACE_PAGE_SIZE)
+    page = paginator.get_page(request.GET.get("page"))
+
+    user_options = (
+        QueryTrace.objects.exclude(user=None)
+        .values_list("user_id", "user__username")
+        .distinct()
+        .order_by("user__username")
+    )
+    model_options = (
+        QueryTrace.objects.exclude(model_name="")
+        .values_list("model_name", flat=True)
+        .distinct()
+        .order_by("model_name")
+    )
+
+    filter_params = []
+    if filters["selected_user"]:
+        filter_params.append(("user", filters["selected_user"]))
+    if filters["selected_model"]:
+        filter_params.append(("model", filters["selected_model"]))
+    if filters["keyword"]:
+        filter_params.append(("q", filters["keyword"]))
+    if filters["range_name"] == "custom":
+        filter_params.extend([("start", filters["start"]), ("end", filters["end"])])
+    list_params = [("range", filters["range_name"])] + filter_params
+
+    context = {
+        "page_title": "请求 Query 追溯",
+        "traces": page.object_list,
+        "page_obj": page,
+        "paginator": paginator,
+        "total_count": paginator.count,
+        "user_options": list(user_options),
+        "model_options": list(model_options),
+        "last_job": UsageImportJob.objects.filter(source_name=QUERY_TRACE_SOURCE_NAME).first(),
+        "trace_enabled": settings.QUERY_TRACE_ENABLED,
+        "store_mode": settings.QUERY_TRACE_STORE_MODE,
+        "retention_rows": settings.QUERY_TRACE_MAX_ROWS,
+        "retention_days": settings.QUERY_TRACE_MAX_AGE_DAYS,
+        "max_chars": settings.QUERY_TRACE_MAX_CHARS,
+        # range buttons keep the current filters; pagination links keep range + filters
+        "filter_suffix": f"&{urlencode(filter_params)}" if filter_params else "",
+        "list_query": f"&{urlencode(list_params)}",
+        **filters,
+    }
+    return render(request, "dashboard/query_trace_list.html", context)
+
+
+@admin_required
+def query_trace_detail(request, short_id):
+    """Admin view: one captured query with its usage row and log metadata."""
+    trace = get_object_or_404(QueryTrace.objects.select_related("user", "api_key"), short_id=short_id)
+    usage_log = None
+    if trace.request_id:
+        usage_log = UsageLog.objects.filter(request_id=trace.request_id).first()
+    return render(request, "dashboard/query_trace_detail.html", {
+        "page_title": f"Query 详情 · {trace.short_id}",
+        "trace": trace,
+        "usage_log": usage_log,
+    })
+

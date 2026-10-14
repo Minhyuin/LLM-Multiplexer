@@ -628,7 +628,23 @@ def _is_known_key_identifier(key_id, known_plaintexts, known_hashes, known_prefi
     return False
 
 
-def sync_keeper_usage_records(limit=KEEPER_DB_SYNC_BATCH):
+def sync_query_trace_records(keeper_events=None, **kwargs):
+    """Import proxy request-log files into QueryTrace.
+
+    Tracing is an add-on: a broken log directory or an unreadable file must never
+    abort the usage sync that keeps the portal totals correct, so failures are
+    logged and reported as ``None``.
+    """
+    from usage.query_trace import sync_query_traces
+
+    try:
+        return sync_query_traces(keeper_events=keeper_events, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.error("query trace sync failed: %s", exc)
+        return None
+
+
+def sync_keeper_usage_records(limit=KEEPER_DB_SYNC_BATCH, with_query_traces=True):
     """Sync from the local keeper database when present, else the HTTP API."""
     if keeper_db_available():
         events = fetch_keeper_events_sqlite(since_id=latest_keeper_event_id(), limit=limit)
@@ -644,9 +660,17 @@ def sync_keeper_usage_records(limit=KEEPER_DB_SYNC_BATCH):
                 known_plaintexts, known_hashes, known_prefixes,
             )
         ]
-        return import_keeper_usage_events(events, source_name="cpa-usage-keeper-db")
+        job = import_keeper_usage_events(events, source_name="cpa-usage-keeper-db")
+        if with_query_traces:
+            # The keeper events imported a moment ago are what let us say which
+            # member sent the query, so trace sync rides along with this run.
+            sync_query_trace_records(keeper_events=events)
+        return job
     events = fetch_keeper_usage_events()
-    return import_keeper_usage_events(events)
+    job = import_keeper_usage_events(events)
+    if with_query_traces:
+        sync_query_trace_records()
+    return job
 
 
 def sync_cliproxy_usage_records():

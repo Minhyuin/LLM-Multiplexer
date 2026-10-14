@@ -1,0 +1,126 @@
+{% extends 'base.html' %}
+{% load ui_tags %}
+
+{% block title %}请求 Query 追溯{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-3">
+    <span class="eyebrow-badge mb-2 d-inline-flex">Admin</span>
+    <h3 class="mb-1">请求 Query 追溯</h3>
+    <p class="text-muted mb-0">
+        仅管理员可见。记录每位成员请求中最新的用户提问，用于泄露排查；
+        滚动保存最近 {{ retention_rows }} 条 / {{ retention_days }} 天，超出后自动删除最旧记录。
+    </p>
+</section>
+
+{% if not trace_enabled %}
+    <div class="alert alert-warning" role="alert">
+        追溯功能当前处于关闭状态（QUERY_TRACE_ENABLED=false），页面不会新增记录。
+    </div>
+{% endif %}
+
+<section class="card panel-card mb-3">
+    <div class="card-body">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <a class="btn btn-sm btn-soft {% if range_name == 'today' %}active{% endif %}" href="?range=today{{ filter_suffix }}">今日</a>
+            <a class="btn btn-sm btn-soft {% if range_name == 'last_7_days' %}active{% endif %}" href="?range=last_7_days{{ filter_suffix }}">近 7 天</a>
+            <a class="btn btn-sm btn-soft {% if range_name == 'this_month' %}active{% endif %}" href="?range=this_month{{ filter_suffix }}">本月</a>
+            <a class="btn btn-sm btn-soft {% if range_name == 'last_30_days' %}active{% endif %}" href="?range=last_30_days{{ filter_suffix }}">近 30 天</a>
+            <a class="btn btn-sm btn-soft {% if range_name == 'all' %}active{% endif %}" href="?range=all{{ filter_suffix }}">全部</a>
+            <form method="get" class="d-flex flex-wrap align-items-center gap-2">
+                <input type="hidden" name="range" value="custom">
+                <input type="date" name="start" value="{{ start }}" class="form-control form-control-sm">
+                <span class="text-muted">~</span>
+                <input type="date" name="end" value="{{ end }}" class="form-control form-control-sm">
+                <button class="btn btn-sm btn-soft" type="submit">确定</button>
+            </form>
+        </div>
+
+        <form method="get" class="d-flex flex-wrap align-items-center gap-2 mt-3">
+            <input type="hidden" name="range" value="{{ range_name }}">
+            {% if range_name == 'custom' %}
+                <input type="hidden" name="start" value="{{ start }}">
+                <input type="hidden" name="end" value="{{ end }}">
+            {% endif %}
+            <select name="user" class="form-select form-select-sm" style="max-width: 200px;">
+                <option value="">全部成员</option>
+                {% for user_id, username in user_options %}
+                    <option value="{{ user_id }}" {% if selected_user == user_id|stringformat:'s' %}selected{% endif %}>{{ username }}</option>
+                {% endfor %}
+            </select>
+            <select name="model" class="form-select form-select-sm" style="max-width: 240px;">
+                <option value="">全部模型</option>
+                {% for model_name in model_options %}
+                    <option value="{{ model_name }}" {% if selected_model == model_name %}selected{% endif %}>{{ model_name }}</option>
+                {% endfor %}
+            </select>
+            <input type="search" name="q" value="{{ keyword }}" class="form-control form-control-sm" style="max-width: 280px;" placeholder="关键词（提问内容 / 成员）">
+            <button class="btn btn-sm btn-primary rounded-pill px-3" type="submit">筛选</button>
+            {% if selected_user or selected_model or keyword %}
+                <a class="btn btn-sm btn-soft" href="?range={{ range_name }}">清除</a>
+            {% endif %}
+        </form>
+    </div>
+</section>
+
+<section class="card panel-card">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <h5 class="section-title mb-0">🗂 共 {{ total_count }} 条记录</h5>
+            <span class="small text-muted">
+                存储模式：{% if store_mode == 'body' %}完整请求体{% else %}仅最后一条提问{% endif %}
+                {% if last_job %} · 上次同步 {{ last_job.created_at|date:'m-d H:i' }}（新增 {{ last_job.imported_count }} / 跳过 {{ last_job.skipped_count }}）{% endif %}
+            </span>
+        </div>
+
+        <div class="table-responsive soft-table-wrap mt-3">
+            <table class="table table-sm soft-table align-middle">
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>成员</th>
+                        <th>模型</th>
+                        <th>提问内容</th>
+                        <th class="text-end">字符</th>
+                        <th>状态</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for trace in traces %}
+                    <tr>
+                        <td class="text-nowrap">{{ trace.request_time|date:'m-d H:i' }}</td>
+                        <td>{{ trace.user_identifier|default:'-' }}</td>
+                        <td>{{ trace.model_name|default:'-' }}</td>
+                        <td class="query-trace-excerpt">{{ trace.query_text|truncatechars:140 }}</td>
+                        <td class="text-end">{{ trace.query_chars }}</td>
+                        <td>
+                            {% if trace.truncated %}<span class="badge text-bg-warning">截断</span>{% endif %}
+                            {% if trace.redacted %}<span class="badge text-bg-secondary">已脱敏</span>{% endif %}
+                            {% if not trace.truncated and not trace.redacted %}<span class="text-muted small">完整</span>{% endif %}
+                        </td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-soft" href="{% url 'admin-query-trace-detail' trace.short_id %}">查看</a>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="7" class="text-center text-muted">当前筛选范围内没有追溯记录</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if page_obj.paginator.num_pages > 1 %}
+            <nav class="d-flex gap-2 align-items-center mt-3" aria-label="追溯记录分页">
+                {% if page_obj.has_previous %}
+                    <a class="btn btn-sm btn-soft" href="?page={{ page_obj.previous_page_number }}{{ list_query }}">上一页</a>
+                {% endif %}
+                <span class="small text-muted">第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页 · 共 {{ total_count }} 条</span>
+                {% if page_obj.has_next %}
+                    <a class="btn btn-sm btn-soft" href="?page={{ page_obj.next_page_number }}{{ list_query }}">下一页</a>
+                {% endif %}
+            </nav>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

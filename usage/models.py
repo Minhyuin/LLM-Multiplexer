@@ -38,6 +38,52 @@ class UsageLog(models.Model):
         return f"{self.request_id} - {self.model_name}"
 
 
+class QueryTrace(models.Model):
+    """The concrete query behind one proxied request (leak-security tracing).
+
+    Rows are written from the CLIProxy request log and pruned FIFO: the newest
+    ``QUERY_TRACE_MAX_ROWS`` rows survive, and nothing older than
+    ``QUERY_TRACE_MAX_AGE_DAYS`` is kept.  ``short_id`` is the proxy's short
+    request id (the tail of the keeper's request UUID), which ties a trace back to
+    its :class:`UsageLog` row.
+    """
+
+    short_id = models.CharField(max_length=16, unique=True)
+    request_id = models.CharField(max_length=64, blank=True, db_index=True)
+    upstream_request_id = models.CharField(max_length=64, blank=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="query_traces"
+    )
+    api_key = models.ForeignKey(
+        "api_keys.APIKey", null=True, blank=True, on_delete=models.SET_NULL, related_name="query_traces"
+    )
+    user_identifier = models.CharField(max_length=150, blank=True)
+    api_key_identifier = models.CharField(max_length=150, blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    endpoint = models.CharField(max_length=120, blank=True)
+    log_name = models.CharField(max_length=200, blank=True)
+    log_bytes = models.PositiveIntegerField(default=0)
+    query_text = models.TextField(blank=True)
+    query_chars = models.PositiveIntegerField(default=0)
+    truncated = models.BooleanField(default=False)
+    redacted = models.BooleanField(default=False)
+    message_count = models.PositiveIntegerField(default=0)
+    has_attachments = models.BooleanField(default=False)
+    status_code = models.PositiveIntegerField(default=0)
+    request_time = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-request_time", "-id"]
+        indexes = [
+            models.Index(fields=["request_time", "model_name"]),
+            models.Index(fields=["user", "request_time"]),
+        ]
+
+    def __str__(self):
+        return f"{self.short_id} - {self.user_identifier or 'unknown'}"
+
+
 class UsageImportJob(models.Model):
     SOURCE_UPLOAD = "upload"
     SOURCE_COMMAND = "command"
