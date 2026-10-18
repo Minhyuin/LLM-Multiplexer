@@ -1,9 +1,10 @@
-{% if images %}
-<div class="home-content-images" aria-label="内容图片">
-    {% for image in images %}
+{% if images %}{% with shown=images|slice:":3" %}
+<div class="home-content-images{% if shown|length >= 3 %} home-content-images--row{% endif %}" aria-label="内容图片">
+    {% for image in shown %}
     <a href="{% url 'attachment-serve' image.pk %}" target="_blank" rel="noopener" aria-label="查看原图：{{ image.original_name }}">
         <img src="{% url 'attachment-serve' image.pk %}" alt="{{ image.original_name }}"{% if image.width and image.height %} width="{{ image.width }}" height="{{ image.height }}"{% endif %} loading="lazy" decoding="async">
     </a>
     {% endfor %}
 </div>
-{% endif %}
+{% endwith %}{% endif %}
+{% if images_more_href %}<a class="home-images-more small" href="{{ images_more_href }}">查看详细（共 {{ images_total }} 张） <span aria-hidden="true">↗</span></a>{% endif %}

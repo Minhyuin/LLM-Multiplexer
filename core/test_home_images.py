@@ -1,5 +1,7 @@
 from django.contrib.auth.models import User
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from core.models import Announcement, Attachment, DiscussionPost, DiscussionTopic
@@ -45,8 +47,6 @@ class HomeImageTests(TestCase):
     def test_image_lookup_count_does_not_grow_with_topic_count(self):
         topic = DiscussionTopic.objects.create(title="One", created_by=self.user)
         self.image(post=DiscussionPost.objects.create(topic=topic, author=self.user, body="Post"))
-        from django.db import connection
-        from django.test.utils import CaptureQueriesContext
         with CaptureQueriesContext(connection) as queries:
             self.client.get(reverse("home"))
         initial = len(queries)
@@ -56,3 +56,40 @@ class HomeImageTests(TestCase):
         with CaptureQueriesContext(connection) as queries:
             self.client.get(reverse("home"))
         self.assertEqual(len(queries), initial)
+
+    def rendered_image_ids(self, response):
+        html = response.content.decode()
+        return [image.pk for image in Attachment.objects.order_by("pk") if f'src="{reverse("attachment-serve", args=[image.pk])}"' in html]
+
+    def test_discussion_preview_stops_at_three_images_and_links_to_the_first_hidden_one(self):
+        topic = DiscussionTopic.objects.create(title="Many", created_by=self.user)
+        images = [self.image(post=DiscussionPost.objects.create(topic=topic, author=self.user, body=f"Post {i}")) for i in range(5)]
+        response = self.client.get(reverse("home"))
+        self.assertEqual(self.rendered_image_ids(response), [image.pk for image in images[:3]])
+        self.assertEqual(response.context["discussion_topics"][0].home_image_total, 5)
+        self.assertContains(response, "查看详细（共 5 张）")
+        self.assertContains(response, f'{reverse("discussion-detail", args=[topic.pk])}#post-{images[3].post_id}')
+
+    def test_three_images_need_no_overflow_link(self):
+        topic = DiscussionTopic.objects.create(title="Three", created_by=self.user)
+        images = [self.image(post=DiscussionPost.objects.create(topic=topic, author=self.user, body=f"Post {i}")) for i in range(3)]
+        response = self.client.get(reverse("home"))
+        self.assertEqual(self.rendered_image_ids(response), [image.pk for image in images])
+        self.assertNotContains(response, "查看详细")
+        # A full row equalises widths; fewer images keep their natural size.
+        self.assertContains(response, "home-content-images--row")
+
+    def test_two_images_keep_their_natural_size(self):
+        topic = DiscussionTopic.objects.create(title="Two", created_by=self.user)
+        images = [self.image(post=DiscussionPost.objects.create(topic=topic, author=self.user, body=f"Post {i}")) for i in range(2)]
+        response = self.client.get(reverse("home"))
+        self.assertEqual(self.rendered_image_ids(response), [image.pk for image in images])
+        self.assertNotContains(response, "home-content-images--row")
+
+    def test_notice_previews_share_the_three_image_cap(self):
+        notice = Announcement.objects.create(title="Photos", body="Body", is_published=True)
+        images = [self.image(announcement=notice) for _ in range(4)]
+        response = self.client.get(reverse("home"))
+        self.assertEqual(self.rendered_image_ids(response), [image.pk for image in images[:3]])
+        self.assertContains(response, "查看详细（共 4 张）")
+        self.assertContains(response, f'{reverse("announcement-list")}#notice-{notice.pk}')

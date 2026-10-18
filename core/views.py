@@ -3,9 +3,10 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count, F, Prefetch
+from django.db.models import Count
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
@@ -52,20 +53,51 @@ def _detail_context(request, topic, form=None):
             "can_edit_topic": _is_admin(request.user) or topic.created_by_id == request.user.pk}
 
 
+HOME_IMAGE_LIMIT = 3
+
+
+def _attach_home_images(owners, images, *, group_key, more_href):
+    """Attach at most ``HOME_IMAGE_LIMIT`` previews to every owner of ``images``.
+
+    ``group_key(image)`` maps an image to the owner pk it belongs to, while
+    ``more_href(owner, first_hidden)`` builds the link that reaches the first
+    image which did not fit. Each owner ends up with ``home_images``,
+    ``home_image_total`` and ``home_images_more``. Callers pre-filter ``images``
+    so the number of queries stays constant however many owners there are.
+    """
+    by_owner = {owner.pk: [] for owner in owners}
+    for image in images:
+        found = by_owner.get(group_key(image))
+        if found is not None:
+            found.append(image)
+    for owner in owners:
+        found = by_owner[owner.pk]
+        owner.home_image_total = len(found)
+        owner.home_images = found[:HOME_IMAGE_LIMIT]
+        owner.home_images_more = more_href(owner, found[HOME_IMAGE_LIMIT]) if len(found) > HOME_IMAGE_LIMIT else ""
+
+
 @login_required
 @require_http_methods(["GET", "HEAD"])
 def home(request):
     images = Attachment.objects.filter(kind=Attachment.KIND_IMAGE, mime_type__startswith="image/")
-    announcements = Announcement.objects.filter(is_published=True).prefetch_related(
-        Prefetch("attachments", queryset=images, to_attr="home_images")
-    ).order_by("-created_at", "-pk")[:5]
+    announcements = list(Announcement.objects.filter(is_published=True).order_by("-created_at", "-pk")[:5])
+    _attach_home_images(
+        announcements,
+        images.filter(announcement_id__in=[item.pk for item in announcements]).order_by("pk"),
+        group_key=lambda image: image.announcement_id,
+        more_href=lambda item, _hidden: f"{reverse('announcement-list')}#notice-{item.pk}",
+    )
     topics = list(_topics()[:8])
-    images_by_topic = {topic.pk: [] for topic in topics}
-    # Fetch images from both opening posts and replies without loading every post.
-    for image in images.filter(post__topic_id__in=images_by_topic).annotate(home_topic_id=F("post__topic_id")):
-        images_by_topic[image.home_topic_id].append(image)
-    for topic in topics:
-        topic.home_images = images_by_topic[topic.pk]
+    # Opening posts and replies both feed the preview strip; one query covers every topic.
+    _attach_home_images(
+        topics,
+        images.filter(post__topic_id__in=[topic.pk for topic in topics])
+        .select_related("post")
+        .order_by("post__created_at", "pk"),
+        group_key=lambda image: image.post.topic_id,
+        more_href=lambda topic, hidden: f"{reverse('discussion-detail', args=[topic.pk])}#post-{hidden.post_id}",
+    )
     return render(request, "core/home.html", {"announcements": announcements, "discussion_topics": topics, "portal_version": portal_release_version()})
 
 
@@ -120,7 +152,6 @@ def discussion_reply(request, topic_id):
         post.save()
         topic.save(update_fields=["updated_at"])
         page = (topic.posts.count() - 1) // 20 + 1
-        from django.urls import reverse
         target = f"{reverse('discussion-detail', args=[topic.pk])}?page={page}#post-{post.pk}"
         # Blob writes are the last fallible step: anything that can still fail
         # (URL reversing, page count, topic touch) has already run.

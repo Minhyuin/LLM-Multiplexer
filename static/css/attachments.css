@@ -1,25 +1,62 @@
-/* Homepage previews preserve the image ratio and follow the available column width. */
+/* Every content image is capped to --media-cap on both axes, so a single image
+   never renders wider than the device-appropriate N. Narrow containers shrink
+   below N through the min() against 100%. */
+:root {
+    --media-cap: 768px;
+}
+
+@media (max-width: 991.98px) {
+    :root {
+        --media-cap: 600px;
+    }
+}
+
+@media (max-width: 575.98px) {
+    :root {
+        --media-cap: 360px;
+    }
+}
+
+.site-body img {
+    max-width: min(100%, var(--media-cap));
+    max-height: var(--media-cap);
+}
+
+/* Homepage previews: at most three per entry, laid out as one row that never
+   exceeds --media-cap. A full three-image row first brings every image to the
+   same width — the widest one's — by sharing the row evenly, and only then
+   shrinks that shared width until the row fits under N. One or two images keep
+   their natural size instead of being stretched. */
 .home-community-grid > section,
 .home-discussion-entry {
     min-width: 0;
 }
 .home-content-images {
-    display: grid;
+    display: flex;
     gap: 0.75rem;
-    margin: 0.75rem 0 1rem;
+    margin: 0.75rem 0 0.5rem;
     min-width: 0;
+    max-width: min(100%, var(--media-cap));
 }
 .home-content-images a {
     display: block;
+    flex: 0 1 auto;
     min-width: 0;
+}
+.home-content-images--row a {
+    flex: 1 1 0;
 }
 .home-content-images img {
     display: block;
-    max-width: min(100%, 512px);
-    max-height: 512px;
+    max-width: 100%;
+    max-height: var(--media-cap);
     width: auto;
     height: auto;
     border-radius: 6px;
+}
+.home-images-more {
+    display: inline-block;
+    margin-bottom: 1rem;
 }
 
 /* ===== Private attachments (announcements & discussions) ===== */
@@ -52,13 +89,14 @@
 
 .attachment-image-preview {
     display: block;
-    width: 100%;
+    max-width: 100%;
     min-width: 0;
 }
 
 .attachment-image-preview img {
     display: block;
-    max-width: 100%;
+    max-width: min(100%, var(--media-cap));
+    max-height: var(--media-cap);
     width: auto;
     height: auto;
     border-radius: 4px;
