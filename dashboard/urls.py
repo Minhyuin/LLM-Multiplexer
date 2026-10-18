@@ -5,6 +5,8 @@ from dashboard import views
 urlpatterns = [
     path("public/modules/<str:module>/", views.public_dashboard_module, name="public-dashboard-module"),
     path("admin/modules/<str:module>/", views.admin_dashboard_module, name="admin-dashboard-module"),
+    path("public/model-usage/", views.public_model_usage, name="public-model-usage"),
+    path("admin/model-usage/", views.admin_model_usage, name="admin-model-usage"),
     path("public/", views.public_dashboard, name="public-dashboard"),
     path("admin/", views.admin_dashboard, name="admin-dashboard"),
     path("admin/pricing/", views.model_pricing_admin, name="admin-model-pricing"),

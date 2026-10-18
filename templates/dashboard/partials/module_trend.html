@@ -15,7 +15,9 @@
                 <div class="dashboard-chart-pie"><canvas id="teamModelUsageChart" height="160" role="img" aria-label="队内模型 Token 用量占比"></canvas></div>
                 <div class="model-chip-group mt-2">
                     {% for item in dashboard.model_rank %}
-                        <span class="model-chip">{{ item.model_name }} · {{ item.total_tokens|token_unit }}</span>
+                        <button type="button" class="model-chip" data-model="{{ item.model_name }}"
+                                aria-haspopup="dialog" aria-expanded="false"
+                                title="查看调用过 {{ item.model_name }} 的成员占比">{{ item.model_name }} · {{ item.total_tokens|token_unit }}</button>
                     {% empty %}
                         <span class="text-muted">暂无模型消耗数据</span>
                     {% endfor %}

@@ -70,7 +70,146 @@
             if (version === generation && revisions.get(slot)===revision) slot.setAttribute('aria-busy','false');
         }
     }
+    // ---- 模型用量：点击模型查看成员占比浮窗 -----------------------------------
+    const usageEndpoint = root.dataset.modelUsage || '';
+    let popover = null;
+    let popoverChip = null;
+    let popoverRequest = null;
+
+    function closePopover() {
+        if (popoverRequest) {popoverRequest.abort(); popoverRequest = null;}
+        if (popover) {popover.remove(); popover = null;}
+        if (popoverChip) {popoverChip.setAttribute('aria-expanded','false'); popoverChip.removeAttribute('aria-busy'); popoverChip = null;}
+    }
+
+    function compactNumber(value) {
+        const number = Number(value) || 0;
+        if (number >= 1e9) return (number / 1e9).toFixed(1) + 'B';
+        if (number >= 1e6) return (number / 1e6).toFixed(1) + 'M';
+        if (number >= 1e3) return (number / 1e3).toFixed(1) + 'k';
+        return String(number);
+    }
+
+    function placePopover(chip) {
+        const gap = 8, margin = 12, rect = chip.getBoundingClientRect();
+        const width = Math.min(360, window.innerWidth - margin * 2);
+        popover.style.width = width + 'px';
+        popover.style.left = Math.min(Math.max(margin, rect.left), Math.max(margin, window.innerWidth - width - margin)) + 'px';
+        const height = popover.offsetHeight;
+        let top = rect.bottom + gap;
+        if (top + height > window.innerHeight - margin) {
+            top = rect.top - height - gap;
+            if (top < margin) top = Math.max(margin, window.innerHeight - height - margin);
+        }
+        popover.style.top = Math.max(margin, top) + 'px';
+    }
+
+    function renderPopover(chip, data) {
+        popover.textContent = '';
+        const title = document.createElement('div');
+        title.className = 'model-usage-title';
+        title.textContent = data.model;
+        const meta = document.createElement('div');
+        meta.className = 'model-usage-summary';
+        meta.textContent = data.range_label + ' · ' + compactNumber(data.total_tokens) + ' Token · '
+            + data.total_requests + ' 次请求 · ' + data.user_count + ' 人调用';
+        popover.append(title, meta);
+        if (!data.users.length) {
+            const empty = document.createElement('p');
+            empty.className = 'model-usage-empty';
+            empty.textContent = '该模型在当前范围内没有调用记录。';
+            popover.append(empty);
+        } else {
+            const list = document.createElement('div');
+            list.className = 'model-usage-list';
+            for (const user of data.users) {
+                const row = document.createElement('div'); row.className = 'model-usage-row';
+                const head = document.createElement('div'); head.className = 'model-usage-row-head';
+                const name = document.createElement('span'); name.className = 'model-usage-name'; name.textContent = user.name;
+                const share = document.createElement('span'); share.className = 'model-usage-share'; share.textContent = Number(user.share).toFixed(1) + '%';
+                head.append(name, share);
+                const bar = document.createElement('div'); bar.className = 'model-usage-bar';
+                const fill = document.createElement('i'); fill.style.width = Math.max(0, Math.min(100, user.share)) + '%';
+                bar.append(fill);
+                const figure = document.createElement('div'); figure.className = 'model-usage-figure';
+                figure.textContent = compactNumber(user.tokens) + ' Token · ' + user.requests + ' 次';
+                row.append(head, bar, figure);
+                list.append(row);
+            }
+            popover.append(list);
+        }
+        if (popoverChip) popoverChip.setAttribute('aria-busy','false');
+        placePopover(chip);
+    }
+
+    async function openPopover(chip) {
+        closePopover();
+        if (!usageEndpoint) return;
+        popoverChip = chip;
+        chip.setAttribute('aria-expanded','true');
+        chip.setAttribute('aria-busy','true');
+        popover = document.createElement('div');
+        popover.className = 'model-usage-popover';
+        popover.setAttribute('role','dialog');
+        popover.setAttribute('aria-label','模型用量成员占比');
+        const loading = document.createElement('p');
+        loading.className = 'model-usage-empty';
+        loading.textContent = '正在统计…';
+        popover.append(loading);
+        document.body.append(popover);
+        placePopover(chip);
+        popoverRequest = new AbortController();
+        const params = new URLSearchParams(location.search);
+        params.set('model', chip.dataset.model);
+        try {
+            const response = await fetch(usageEndpoint + '?' + params.toString(), {signal: popoverRequest.signal, credentials: 'same-origin'});
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            const data = await response.json();
+            if (popover && popoverChip === chip) renderPopover(chip, data);
+        } catch (error) {
+            if (error.name === 'AbortError' || !popover || popoverChip !== chip) return;
+            popover.textContent = '';
+            const failed = document.createElement('p');
+            failed.className = 'model-usage-empty';
+            failed.textContent = '统计失败，请重试。';
+            popover.append(failed);
+            popoverChip.removeAttribute('aria-busy');
+            placePopover(chip);
+        }
+    }
+
+    root.addEventListener('click', event => {
+        const chip = event.target.closest('.model-chip[data-model]');
+        if (!chip) return;
+        event.preventDefault();
+        if (chip === popoverChip) {closePopover(); return;}
+        openPopover(chip);
+    });
+    document.addEventListener('pointerdown', event => {
+        if (!popover) return;
+        if (popover.contains(event.target) || (event.target.closest && event.target.closest('.model-chip[data-model]'))) return;
+        closePopover();
+    });
+    document.addEventListener('keydown', event => {if (event.key === 'Escape') closePopover();});
+    // Focusing the clicked button can nudge the page by a pixel; closing on that
+    // would dismiss the popover the moment it opens, so scrolling re-anchors it
+    // instead and only closes once the chip leaves the viewport.
+    let anchorFrame = 0;
+    function anchorPopover() {
+        if (!popover || !popoverChip || anchorFrame) return;
+        anchorFrame = requestAnimationFrame(() => {
+            anchorFrame = 0;
+            if (!popover || !popoverChip) return;
+            const rect = popoverChip.getBoundingClientRect();
+            if (rect.bottom < 0 || rect.top > window.innerHeight) {closePopover(); return;}
+            placePopover(popoverChip);
+        });
+    }
+    window.addEventListener('scroll', anchorPopover, {passive: true});
+    window.addEventListener('resize', anchorPopover);
+
     async function refresh() {
+        closePopover();
         controller.abort(); controller=new AbortController();const version=++generation;
         for (const chart of charts.values()) chart.destroy(); charts.clear();
         const order=['summary','personal','trend','rankings','keys','errors','active'];

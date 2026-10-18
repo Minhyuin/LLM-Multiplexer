@@ -1,5 +1,5 @@
 {% include 'dashboard/partials/dashboard_filters.html' %}
-<div id="dashboard-modules" data-endpoint="{{ module_base_url }}" aria-label="队内统计">
+<div id="dashboard-modules" data-endpoint="{{ module_base_url }}" data-model-usage="{{ model_usage_url }}" aria-label="队内统计">
     <section data-module="summary" class="mb-3" aria-label="统计总览" aria-busy="true"><p class="text-muted">正在加载统计总览…</p></section>
     <div class="row g-3 mb-3">
         <section data-module="trend" class="col-lg-8" aria-label="趋势与模型用量" aria-busy="true"><p class="text-muted">正在加载趋势与模型用量…</p></section>

@@ -559,11 +559,121 @@ body.dashboard-page.dashboard-navigating main {
     display: inline-flex;
     align-items: center;
     padding: 0.45rem 0.8rem;
+    border: 0;
     border-radius: 999px;
     background: rgba(15, 23, 42, 0.06);
     color: var(--text-main);
+    font-family: inherit;
     font-size: 0.86rem;
     font-weight: 600;
+    line-height: inherit;
+}
+
+/* 只有队内模型用量那排 chip 可点击（队员自己的用量 chip 保持只读外观） */
+.model-chip[data-model] {
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.model-chip[data-model]:hover {
+    background: rgba(90, 122, 107, 0.2);
+}
+
+.model-chip[data-model]:focus-visible {
+    outline: 2px solid #5a7a6b;
+    outline-offset: 2px;
+}
+
+.model-chip[data-model][aria-expanded="true"] {
+    background: rgba(90, 122, 107, 0.26);
+}
+
+.model-chip[data-model][aria-busy="true"] {
+    opacity: 0.55;
+    cursor: progress;
+}
+
+/* 模型用量浮窗：由 dashboard_js 定位到被点击的 chip 下方 */
+.model-usage-popover {
+    position: fixed;
+    z-index: 1080;
+    max-height: min(60vh, 420px);
+    padding: 0.85rem 0.95rem;
+    overflow-y: auto;
+    border: 1px solid #d4cdc5;
+    border-radius: 8px;
+    background: #faf7f3;
+    box-shadow: 0 18px 40px rgba(43, 36, 28, 0.2);
+    color: var(--text-main);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.model-usage-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
+}
+
+.model-usage-summary {
+    margin-top: 0.15rem;
+    color: var(--text-soft);
+    font-size: 0.78rem;
+}
+
+.model-usage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin-top: 0.7rem;
+}
+
+.model-usage-row-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.model-usage-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.model-usage-share {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+
+.model-usage-bar {
+    height: 4px;
+    margin-top: 0.25rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.08);
+}
+
+.model-usage-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: #5a7a6b;
+}
+
+.model-usage-figure {
+    margin-top: 0.2rem;
+    color: var(--text-soft);
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.model-usage-empty {
+    margin: 0.6rem 0 0;
+    color: var(--text-soft);
 }
 
 .usage-trend-card .model-chip-group {

@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 
@@ -137,7 +137,8 @@ def _dashboard_shell(request, admin=False):
     _, _, context = _dashboard_scope(request, admin)
     groups, grades = _get_filter_options()
     context.update(group_options=groups, grade_options=grades, dashboard_is_admin=admin or request.user.is_staff,
-                   module_base_url=reverse("admin-dashboard" if admin else "public-dashboard") + "modules/")
+                   module_base_url=reverse("admin-dashboard" if admin else "public-dashboard") + "modules/",
+                   model_usage_url=reverse("admin-model-usage" if admin else "public-model-usage"))
     # Statistics endpoints only read data; do not start an upstream import on page load.
     return render(request, "dashboard/admin_dashboard.html" if admin else "dashboard/public_dashboard.html", context)
 
@@ -220,6 +221,81 @@ def admin_dashboard_module(request, module):
         from django.http import HttpResponseNotAllowed
         return HttpResponseNotAllowed(["GET", "HEAD"])
     return _dashboard_module(request, module, admin=True)
+
+
+# Labels mirror the range links rendered by the filter bar so the popover can
+# restate the active window without a second lookup table in the template.
+MODEL_USAGE_RANGE_LABELS = {
+    "today": "今日", "last_7_days": "近 7 天", "this_month": "本月",
+    "last_30_days": "近 30 天", "all": "全部时间", "custom": "自定义区间",
+}
+
+
+def _model_usage_range_label(context):
+    if context["range_name"] == "custom" and context["custom_start"] and context["custom_end"]:
+        return f"{context['custom_start']} 至 {context['custom_end']}"
+    return MODEL_USAGE_RANGE_LABELS.get(context["range_name"], "统计范围")
+
+
+def _model_usage_name(row):
+    """Popover names fall back to the login name: a column of placeholders is useless."""
+    display_name = (row.get("user__profile__display_name") or "").strip()
+    return display_name or row.get("user__username") or "未知成员"
+
+
+def _model_usage_payload(request, admin=False):
+    """Per-user breakdown for one model inside the dashboard's current filters."""
+    from django.http import JsonResponse
+    model_name = (request.GET.get("model") or "").strip()
+    if not model_name:
+        return JsonResponse({"error": "缺少模型参数"}, status=400)
+    _, visible, context = _dashboard_scope(request, admin)
+    logs = visible.filter(model_name=model_name)
+    totals = logs.aggregate(total_tokens=Sum("total_tokens"), total_requests=Count("id"))
+    total_tokens = int(totals["total_tokens"] or 0)
+    total_requests = int(totals["total_requests"] or 0)
+    rows = logs.values("user_id", "user__username", "user__profile__display_name").annotate(
+        tokens=Sum("total_tokens"), requests=Count("id")
+    ).order_by("-tokens", "-requests", "user_id")
+    users = []
+    for row in rows:
+        tokens = int(row["tokens"] or 0)
+        users.append({
+            "name": _model_usage_name(row),
+            "tokens": tokens,
+            "requests": int(row["requests"] or 0),
+            "share": round(tokens / total_tokens * 100, 1) if total_tokens else 0,
+        })
+    payload = {
+        "model": model_name,
+        "range_label": _model_usage_range_label(context),
+        "total_tokens": total_tokens,
+        "total_requests": total_requests,
+        "user_count": len(users),
+        "users": users,
+    }
+    response = JsonResponse(payload)
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def public_model_usage(request):
+    if request.method not in {"GET", "HEAD"}:
+        from django.http import HttpResponseNotAllowed
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if not settings.PUBLIC_DASHBOARD_ENABLED and not request.user.is_staff:
+        from django.http import HttpResponseForbidden
+        return HttpResponseForbidden()
+    return _model_usage_payload(request)
+
+
+@admin_required
+def admin_model_usage(request):
+    if request.method not in {"GET", "HEAD"}:
+        from django.http import HttpResponseNotAllowed
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    return _model_usage_payload(request, admin=True)
 
 
 @admin_required
