@@ -13,6 +13,7 @@ urlpatterns = [
     path("admin/queries/", views.query_trace_list, name="admin-query-traces"),
     path("admin/queries/<str:short_id>/", views.query_trace_detail, name="admin-query-trace-detail"),
     path("admin/credentials/", views.admin_credentials, name="admin-credentials"),
+    path("admin/credentials/models/", views.admin_credentials_models_refresh, name="admin-credentials-models"),
     path("admin/credentials/health/", views.admin_credentials_health, name="admin-credentials-health"),
     path("admin/credentials/quota-cache/", views.admin_credentials_quota_cache, name="admin-credentials-quota-cache"),
     path("admin/credentials/refresh/<str:auth_index>/", views.admin_credentials_refresh, name="admin-credentials-refresh"),

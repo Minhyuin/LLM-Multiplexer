@@ -124,6 +124,10 @@ PUBLIC_DASHBOARD_MASK_USERNAMES = env_bool("PUBLIC_DASHBOARD_MASK_USERNAMES", Tr
 CLIPROXY_BASE_URL = os.getenv("CLIPROXY_BASE_URL", "http://154.201.92.23")
 CLIPROXY_MANAGEMENT_BASE_URL = os.getenv("CLIPROXY_MANAGEMENT_BASE_URL", "http://154.201.92.23:8317")
 CLIPROXY_MANAGEMENT_KEY = os.getenv("CLIPROXY_MANAGEMENT_KEY", "")
+# Optional dedicated proxy API key for the portal's own model-list requests.
+# Empty means "use the signed-in member's own key", which keeps the list scoped
+# to what that member can actually call.
+CLIPROXY_MODELS_API_KEY = os.getenv("CLIPROXY_MODELS_API_KEY", "")
 
 # --- Query tracing (leak security) ---
 # The proxy writes one log file per request when its own config has

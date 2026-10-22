@@ -6,12 +6,15 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Q, Sum
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.template.loader import render_to_string
 from django.utils import timezone
 
 from core.key_identifiers import key_index, key_suffix
 from core.utils import admin_required
 from dashboard.forms import ModelPricingForm
+from dashboard.model_catalog import collect_available_models
 from dashboard.models import ModelPricing
 from usage.models import QueryTrace, UsageImportJob, UsageLog
 from usage.services import aggregate_dashboard
@@ -628,9 +631,30 @@ def admin_credentials(request):
         creds.sort(key=lambda c: (c["disabled"], -(c.get("five_h_total", 0) + c.get("weekly_total", 0))))
         sorted_groups.append((p, creds))
 
+    catalog = collect_available_models(request.user, fetch=False)
+
     return render(request, "dashboard/credentials.html", {
         "credential_groups": sorted_groups,
         "total_count": len(files),
+        **catalog,
+    })
+
+
+@login_required
+def admin_credentials_models_refresh(request):
+    """Re-read the proxy model list and return the refreshed section markup."""
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"}, status=405)
+
+    catalog = collect_available_models(request.user, fetch=True)
+    html = render_to_string("dashboard/partials/model_catalog.html", catalog, request=request)
+    return JsonResponse({
+        "ok": not catalog["models_error"],
+        "html": html,
+        "error": catalog["models_error"],
+        "count": catalog["models_count"],
+        "provider_count": catalog["models_provider_count"],
+        "source_label": catalog["models_source_label"],
     })
 
 

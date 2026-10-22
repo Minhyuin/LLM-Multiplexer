@@ -1,0 +1,52 @@
+{% load static %}
+{% if models_error %}
+<div class="model-catalog-alert">
+    <i class="bi bi-exclamation-triangle"></i>
+    <span>{{ models_error }}</span>
+</div>
+{% elif not models_loaded %}
+<div class="model-catalog-hint">
+    <i class="bi bi-info-circle"></i>
+    <div>
+        <div class="model-catalog-hint-title">尚未读取模型列表</div>
+        <div class="model-catalog-hint-body">{{ models_hint }}</div>
+    </div>
+</div>
+{% else %}
+<div class="model-catalog-meta">
+    <span>{{ models_count }} 个模型</span>
+    <span class="model-catalog-sep">·</span>
+    <span>{{ models_provider_count }} 个系列</span>
+    <span class="model-catalog-sep">·</span>
+    <span>来源 {{ models_source_label }}</span>
+    <span class="model-catalog-sep">·</span>
+    <span>更新于 {{ models_fetched_at|time:"H:i:s" }}</span>
+</div>
+<div class="model-provider-list">
+    {% for group in model_groups %}
+    <div class="model-provider-row" data-provider="{{ group.key }}">
+        <div class="model-provider-head">
+            {% if group.logo %}
+            <img class="provider-logo" src="{% static group.logo %}" alt="{{ group.label }}" width="20" height="20" loading="lazy">
+            {% else %}
+            <span class="provider-mark" style="--mark-color: {{ group.accent }}"><i class="bi bi-box"></i></span>
+            {% endif %}
+            <span class="model-provider-name">{{ group.label }}</span>
+            <span class="model-provider-count">{{ group.count }}</span>
+        </div>
+        <div class="model-chip-grid">
+            {% for model in group.models %}
+            <span class="model-chip" title="{{ model.id }}">
+                {% if group.logo %}
+                <img class="provider-logo provider-logo-sm" src="{% static group.logo %}" alt="" width="14" height="14" loading="lazy">
+                {% else %}
+                <span class="provider-mark provider-mark-sm" style="--mark-color: {{ group.accent }}"><i class="bi bi-box"></i></span>
+                {% endif %}
+                <span class="model-chip-id">{{ model.id }}</span>
+            </span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
