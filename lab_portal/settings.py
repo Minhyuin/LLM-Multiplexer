@@ -164,6 +164,9 @@ FINGERPRINT_RESPONSE_MAX_BYTES = int(os.getenv("FINGERPRINT_RESPONSE_MAX_BYTES",
 FINGERPRINT_LEASE_SECONDS = 30
 FINGERPRINT_HISTORY_HOURS = 24
 FINGERPRINT_HISTORY_LIMIT = 200
+# Admin accounts own no key, so the picker lists member keys (owner name only).
+# The cap keeps one response bounded; keys beyond it stay usable via the API.
+FINGERPRINT_KEY_CHOICES_LIMIT = int(os.getenv("FINGERPRINT_KEY_CHOICES_LIMIT", 500))
 
 # --- Security settings (production) ---
 if not DEBUG:

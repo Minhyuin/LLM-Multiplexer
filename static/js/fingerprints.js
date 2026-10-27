@@ -50,7 +50,7 @@
         interrupted: 'fp-status-warn'
     };
     var ERROR_TEXT = {
-        no_key: '没有可用于检测的本人 key。',
+        no_key: '没有可用于检测的 key。',
         key_unusable: '所选 key 当前不可用（可能已撤销、过期或无法取到明文）。',
         read_only: '当前处于只读预览，不能发起检测。',
         quota_exhausted: '今日剩余轮次已用完，请明日再试。',
@@ -307,9 +307,21 @@
 
     function keyLabel(key) {
         if (!key) { return ''; }
-        if (typeof key.masked === 'string' && key.masked) { return key.masked; }
-        if (typeof key.name === 'string' && key.name) { return key.name; }
-        return '未命名 key';
+        var own = (typeof key.masked === 'string' && key.masked) ? key.masked
+            : ((typeof key.name === 'string' && key.name) ? key.name : '未命名 key');
+        if (typeof key.owner === 'string' && key.owner) { return key.owner + ' · ' + own; }
+        return own;
+    }
+
+    var adminChoice = false;
+
+    function keyWording() {
+        if (adminChoice) {
+            return { empty: '没有可用于检测的 key', blocked: '没有可用于检测的 key，无法发起检测。',
+                     pick: '请选择用于检测的 key。' };
+        }
+        return { empty: '没有可用的本人 key', blocked: '没有可用于检测的本人 key，无法发起检测。',
+                 pick: '请选择用于检测的本人 key。' };
     }
 
     function renderKeys() {
@@ -317,16 +329,17 @@
         if (!select) { return; }
         var keys = usableKeys();
         while (select.firstChild) { select.removeChild(select.firstChild); }
+        var words = keyWording();
 
         if (!keys.length) {
             var empty = document.createElement('option');
             empty.value = '';
-            empty.textContent = state.readOnly ? '只读预览：不读取可用 key' : '没有可用的本人 key';
+            empty.textContent = state.readOnly ? '只读预览：不读取可用 key' : words.empty;
             select.appendChild(empty);
             select.disabled = true;
             text(dom.keyNote, state.readOnly
                 ? '当前为账户视角只读预览，不会发起任何检测或计费请求。'
-                : '没有可用于检测的本人 key，无法发起检测。');
+                : words.blocked);
             show(dom.keyNote, true);
             return;
         }
@@ -349,8 +362,8 @@
     function startGate() {
         if (!state.enabled) { return { ok: false, reason: '模型指纹检测功能未开启。' }; }
         if (state.readOnly) { return { ok: false, reason: '当前处于只读预览，不能发起检测。' }; }
-        if (!usableKeys().length) { return { ok: false, reason: '没有可用于检测的本人 key。' }; }
-        if (!selectedKey()) { return { ok: false, reason: '请选择用于检测的本人 key。' }; }
+        if (!usableKeys().length) { return { ok: false, reason: keyWording().blocked }; }
+        if (!selectedKey()) { return { ok: false, reason: keyWording().pick }; }
         var quota = state.quota || {};
         if (isNumber(quota.remaining) && quota.remaining <= 0) {
             return { ok: false, reason: '今日剩余轮次已用完，请明日再试。' };
@@ -1255,6 +1268,9 @@
 
     function init() {
         cacheDom();
+        var intro = byId('fp-intro');
+        // Admin accounts own no key; the server flags that they pick by owner name.
+        adminChoice = !!(intro && intro.getAttribute('data-fp-admin-choice') === '1');
         bind();
         upgradeChips();
         renderQuota();

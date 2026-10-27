@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import Client, RequestFactory, TestCase, override_settings
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 
@@ -207,7 +208,7 @@ class StateViewTests(FingerprintViewTestCase):
         payload = self.client.get(self.state_url).json()
         self.assertTrue(payload["enabled"])
         self.assertFalse(payload["read_only"])
-        self.assertEqual(payload["keys"], [{"id": key.pk, "name": key.name, "masked": key.token_masked}])
+        self.assertEqual(payload["keys"], [{"id": key.pk, "name": key.name, "masked": key.token_masked, "owner": ""}])
         self.assertNotIn(key.token_plaintext, json.dumps(payload))
         self.assertEqual(payload["quota"]["remaining"], 3)
         self.assertIsNone(payload["active"])
@@ -406,6 +407,92 @@ class StartViewTests(FingerprintViewTestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(self.error_code(response), code)
         self.assertFalse(FingerprintRun.objects.exists())
+
+
+@override_settings(FINGERPRINT_ENABLED=True, FINGERPRINT_MODEL_POLICIES=MODEL_POLICIES)
+class AdminKeyChoiceTests(FingerprintViewTestCase):
+    """The admin account owns no key; the state payload must expose every live
+    member key with its owner name and nothing else (no plaintext, no hash)."""
+
+    def test_admin_state_lists_member_keys_with_the_owner_name(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        _, member_key = self.member("alice")
+        own = self.make_key(admin, name="admin-key")
+        self.login(admin)
+
+        response = self.client.get(self.state_url)
+        self.assertEqual(response.status_code, 200)
+        keys = {row["id"]: row for row in response.json()["keys"]}
+        self.assertEqual(keys[member_key.pk]["owner"], "alice")
+        self.assertEqual(keys[member_key.pk]["masked"], member_key.token_masked)
+        self.assertEqual(keys[own.pk]["owner"], "")
+        body = response.content.decode()
+        self.assertNotIn(member_key.token_plaintext, body)
+        self.assertNotIn(member_key.token_hash, body)
+
+    def test_a_member_state_never_names_other_owners(self):
+        user, key = self.member("alice")
+        self.member("bob")
+        self.login(user)
+
+        keys = self.client.get(self.state_url).json()["keys"]
+        self.assertEqual([(row["id"], row["owner"]) for row in keys], [(key.pk, "")])
+
+    def test_admin_starts_a_round_with_a_member_key(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        member, key = self.member("alice")
+        self.login(admin)
+
+        response = self.post_json(self.start_url, self.start_payload(key))
+        self.assertEqual(response.status_code, 200, response.content)
+        run = FingerprintRun.objects.get()
+        self.assertEqual((run.user_id, run.api_key_id), (admin.pk, key.pk))
+        self.assertEqual(run.key_label, f"alice · {key.token_masked}")
+        self.assertEqual(self.model_calls, [key.token_plaintext])
+        self.assertFalse(FingerprintQuotaDay.objects.filter(user=member).exists())
+        self.assertEqual(FingerprintQuotaDay.objects.get(user=admin).reserved, 1)
+
+    def test_admin_choice_still_refuses_a_revoked_member_key(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        _, key = self.member("alice")
+        key.status = APIKey.STATUS_REVOKED
+        key.save(update_fields=["status"])
+        self.login(admin)
+
+        response = self.post_json(self.start_url, self.start_payload(key))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.error_code(response), "key_unavailable")
+        self.assertFalse(FingerprintRun.objects.exists())
+
+    def test_the_admin_choice_flag_follows_the_real_account(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        member, _ = self.member("alice")
+        for user, expected in ((admin, True), (member, False)):
+            with self.subTest(username=user.username):
+                request = RequestFactory().get("/")
+                request.user = user
+                self.assertEqual(fingerprint_views.context(request)["fingerprint_admin_choice"], expected)
+
+
+@override_settings(FINGERPRINT_ENABLED=True, FINGERPRINT_MODEL_POLICIES=MODEL_POLICIES)
+class IntroTemplateTests(TestCase):
+    """The intro block only switches to owner-indexed wording for admins."""
+
+    def render(self, **context):
+        return render_to_string("dashboard/partials/fingerprint_intro.html",
+                                {"fingerprint_enabled": True, **context})
+
+    def test_admin_wording_names_the_owner_and_the_billing_target(self):
+        html = self.render(fingerprint_admin_choice=True)
+        self.assertIn('data-fp-admin-choice="1"', html)
+        self.assertIn("按用户名", html)
+        self.assertIn("用量计入该 key 所属用户的账单", html)
+
+    def test_member_wording_stays_self_scoped(self):
+        html = self.render(fingerprint_admin_choice=False)
+        self.assertNotIn("data-fp-admin-choice", html)
+        self.assertIn("使用本人所选 key", html)
+        self.assertNotIn("按用户名", html)
 
 
 @override_settings(FINGERPRINT_ENABLED=True, FINGERPRINT_MODEL_POLICIES=MODEL_POLICIES)

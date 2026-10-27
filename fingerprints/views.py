@@ -9,6 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.cache import add_never_cache_headers
 
+from core.utils import is_portal_admin
 from users.middleware import get_real_user
 from .config import FingerprintError, enabled, limit, model_policy
 from .models import FingerprintRun
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 def context(request):
     return {"fingerprint_enabled": enabled(), "fingerprint_read_only": bool(getattr(request, "view_as", None)),
+            "fingerprint_admin_choice": bool(not getattr(request, "view_as", None) and is_portal_admin(get_real_user(request))),
             "fingerprint_state_url": reverse("fingerprint-state"), "fingerprint_start_url": reverse("fingerprint-start")}
 
 
@@ -101,7 +103,8 @@ def state(request):
     active = runs.filter(status__in=FingerprintRun.ACTIVE).first()
     history = runs.exclude(status__in=FingerprintRun.ACTIVE)[:limit("HISTORY_LIMIT", 200)]
     return {"enabled": True, "read_only": preview,
-            "keys": [{"id": k.pk, "name": k.name, "masked": k.token_masked} for k in usable_keys(user)] if not preview else [],
+            "keys": [{"id": k.pk, "name": k.name, "masked": k.token_masked,
+                      "owner": k.user.username if k.user_id != user.pk else ""} for k in usable_keys(user)] if not preview else [],
             "quota": quota_for(user), "active": serialize(active) if active else None, "history": [serialize(r) for r in history]}
 
 

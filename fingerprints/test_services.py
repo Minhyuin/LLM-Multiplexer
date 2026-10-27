@@ -218,6 +218,61 @@ class OwnerKeyTests(FingerprintServiceTestCase):
 
 
 @override_settings(FINGERPRINT_ENABLED=True, FINGERPRINT_MODEL_POLICIES=MODEL_POLICIES)
+class AdminKeyChoiceTests(FingerprintServiceTestCase):
+    """Admins own no key, so they may pin one active member key per round.  The
+    round, its quota and its usage stay the admins; only the key (and therefore
+    the upstream bill) belongs to the member."""
+
+    def test_admin_lists_every_live_member_key_with_its_owner(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        alice, alice_key = self.owner("alice")
+        bob, bob_key = self.owner("bob")
+        self.make_key(alice, name="revoked", status=APIKey.STATUS_REVOKED)
+        disabled, disabled_key = self.owner("carol")
+        User.objects.filter(pk=disabled.pk).update(is_active=False)
+
+        keys = services.usable_keys(admin)
+        self.assertEqual([(key.pk, key.user.username) for key in keys],
+                         [(alice_key.pk, "alice"), (bob_key.pk, "bob")])
+        self.assertNotIn(disabled_key.pk, [key.pk for key in keys])
+
+    def test_a_member_still_lists_only_their_own_keys(self):
+        alice, alice_key = self.owner("alice")
+        self.owner("bob")
+        self.assertEqual([key.pk for key in services.usable_keys(alice)], [alice_key.pk])
+
+    def test_admin_choice_is_refused_for_a_revoked_member_key(self):
+        self.make_user("root-admin", is_staff=True)
+        alice, _ = self.owner("alice")
+        revoked = self.make_key(alice, name="revoked", status=APIKey.STATUS_REVOKED)
+        self.assertRejected("key_unavailable", 403, services.validate_key, None, revoked.pk)
+
+    def test_admin_round_pins_the_members_key_and_still_charges_the_admin(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        alice, key = self.owner("alice")
+
+        run, reused = services.create_run(admin, key.pk, MODEL, uuid.uuid4())
+        self.assertFalse(reused)
+        self.assertEqual((run.user_id, run.api_key_id), (admin.pk, key.pk))
+        self.assertEqual(run.key_label, f"alice · {key.token_masked}")
+        self.assertEqual(self.counter(admin).reserved, 1)
+        self.assertFalse(FingerprintQuotaDay.objects.filter(user=alice).exists())
+
+    def test_worker_dispatches_with_the_pinned_member_key(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        alice, key = self.owner("alice")
+        run = self.make_run(admin, key=key, status=FingerprintRun.RUNNING, lease=str(uuid.uuid4()))
+        self.add_sample(run, 1)
+        self.seed_quota(admin, day=run.quota_day)
+
+        self.assertEqual(services.dispatch_sample(run.pk, run.lease_token, 1), key.token_plaintext)
+        run.refresh_from_db()
+        self.assertTrue(run.quota_consumed)
+        self.assertEqual(FingerprintQuotaDay.objects.get(user=admin, day=run.quota_day).used, 1)
+        self.assertFalse(FingerprintQuotaDay.objects.filter(user=alice).exists())
+
+
+@override_settings(FINGERPRINT_ENABLED=True, FINGERPRINT_MODEL_POLICIES=MODEL_POLICIES)
 class AdmissionTests(FingerprintServiceTestCase):
     """create_run: feature switch, argument hygiene, owner-only model proof."""
 
@@ -717,7 +772,9 @@ class RecoveryTests(FingerprintServiceTestCase):
         self.assertRejected("key_changed", 409, services.dispatch_sample, run.pk, claimed.lease_token, 2)
 
         other, _ = self.owner("other")
-        APIKey.objects.filter(pk=key.pk).update(user=other)
+        # Hand the intact key to another account: the round must not follow it.
+        APIKey.objects.filter(pk=key.pk).update(user=other, token_plaintext=key.token_plaintext,
+                                               token_hash=key.token_hash)
         self.assertRejected("key_unavailable", 403, services.dispatch_sample, run.pk, claimed.lease_token, 2)
         # No other key was substituted for the member's own key.
         self.assertEqual(FingerprintRun.objects.get(pk=run.pk).status, FingerprintRun.RUNNING)

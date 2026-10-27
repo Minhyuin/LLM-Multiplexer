@@ -43,17 +43,33 @@ def quota_for(user, now=None):
 
 def usable_keys(user):
     now = timezone.now()
-    return [key for key in APIKey.objects.filter(user=user, status=APIKey.STATUS_ACTIVE).exclude(token_plaintext="")
+    queryset = APIKey.objects.filter(status=APIKey.STATUS_ACTIVE).exclude(token_plaintext="")
+    if is_portal_admin(user):
+        # Admins own no key of their own; they may test with any active member key.
+        # The owner name is the only extra metadata exposed, never the plaintext.
+        queryset = queryset.select_related("user").filter(user__is_active=True)
+    else:
+        queryset = queryset.filter(user=user)
+    keys = [key for key in queryset.order_by("user__username", "name", "id")
             if (not key.expires_at or key.expires_at > now) and APIKey.hash_token(key.token_plaintext) == key.token_hash]
+    return keys[:limit("KEY_CHOICES_LIMIT", 500)]
 
 
-def validate_key(user_id, key_id, fingerprint=None):
-    user = get_user_model().objects.filter(pk=user_id, is_active=True).first()
-    if user is None:
-        raise FingerprintError("account_disabled", "账号已停用，检测已停止。", 403)
-    key = APIKey.objects.filter(pk=key_id, user_id=user_id).first()
+def validate_key(owner_id, key_id, fingerprint=None):
+    """Resolve one stored key for admission or for a pinned run.
+
+    ``owner_id=None`` means the key was already pinned (admin cross-user choice or
+    the worker executing that choice), so only key health is re-checked here; the
+    acting account is validated by the caller instead.
+    """
+    if owner_id is None:
+        key = APIKey.objects.filter(pk=key_id).first()
+    else:
+        if not get_user_model().objects.filter(pk=owner_id, is_active=True).exists():
+            raise FingerprintError("account_disabled", "账号已停用，检测已停止。", 403)
+        key = APIKey.objects.filter(pk=key_id, user_id=owner_id).first()
     if key is None or not key.is_usable or not key.token_plaintext:
-        raise FingerprintError("key_unavailable", "本人所选 Key 已不可用，请检查状态后重新发起。", 403)
+        raise FingerprintError("key_unavailable", "所选 Key 已不可用，请检查状态后重新发起。", 403)
     if APIKey.hash_token(key.token_plaintext) != key.token_hash or (fingerprint and key.token_hash != fingerprint):
         raise FingerprintError("key_changed", "所选 Key 已轮换或变更，请重新发起检测。", 409)
     return key
@@ -80,19 +96,20 @@ def create_run(user, key_id, model_id, idempotency_key):
     if previous:
         return previous, True
     policy = model_policy(model_id)
-    key = validate_key(user.pk, key_id)
+    admin = is_portal_admin(user)
+    key = validate_key(None if admin else user.pk, key_id)
     # No configured/system-key fallback. Model availability is always scoped to
     # the selected owner key. This GET is not a paid challenge and is not cached.
     from .transport import available_models
     if model_id not in available_models(key.token_plaintext):
-        raise FingerprintError("model_unavailable", "本人所选 Key 当前无法使用这个模型。", 403)
+        raise FingerprintError("model_unavailable", "所选 Key 当前无法使用这个模型。", 403)
     with queue_lock():
         now = timezone.now()
         _expire_queued(now)
         previous = existing_run(user, identity)
         if previous:
             return previous, True
-        validate_key(user.pk, key_id, key.token_hash)
+        validate_key(None if admin else user.pk, key_id, key.token_hash)
         fresh_user = get_user_model().objects.get(pk=user.pk)
         quota = quota_for(fresh_user, now)
         if quota["remaining"] <= 0:
@@ -107,10 +124,19 @@ def create_run(user, key_id, model_id, idempotency_key):
         counter.last_submitted_at = now
         counter.save()
         run = FingerprintRun.objects.create(user=user, api_key=key, key_fingerprint=key.token_hash,
-            key_label=f"{key.name} · {key.token_masked}"[:160], model_id=model_id, protocol=policy["api"],
+            key_label=key_label_for(user, key), model_id=model_id, protocol=policy["api"],
             parameters=policy, upstream_commit=UPSTREAM_COMMIT, idempotency_key=identity, quota_day=counter.day,
             queue_deadline=now + timedelta(seconds=limit("QUEUE_TIMEOUT", 180)))
         return run, False
+
+
+def key_label_for(actor, key):
+    """Admin runs with a member key must stay auditable: the owner name is part of
+    the stored label, so a run can never be mistaken for the admin's own traffic."""
+    masked = key.token_masked or key.name or "key"
+    if actor.pk != key.user_id:
+        return f"{key.user.username} · {masked}"[:160]
+    return f"{key.name} · {masked}"[:160] if key.name else masked[:160]
 
 
 def aggregate_usage(run):
@@ -228,7 +254,14 @@ def dispatch_sample(run_id, lease, ordinal):
         run = FingerprintRun.objects.get(pk=run_id)
         if run.lease_token != lease or run.status != FingerprintRun.RUNNING or run.cancel_requested or not enabled():
             raise FingerprintError("cancelled", "检测已停止。")
-        key = validate_key(run.user_id, run.api_key_id, run.key_fingerprint)
+        actor = get_user_model().objects.filter(pk=run.user_id, is_active=True).first()
+        if actor is None:
+            raise FingerprintError("account_disabled", "账号已停用，检测已停止。", 403)
+        # The run already pins one key id; admins may pin a member key here.
+        key = validate_key(None, run.api_key_id, run.key_fingerprint)
+        if key.user_id != run.user_id and not is_portal_admin(actor):
+            # A member round may never follow its key to another account.
+            raise FingerprintError("key_unavailable", "所选 Key 已不可用，请检查状态后重新发起。", 403)
         sample = run.samples.get(ordinal=ordinal)
         if sample.status != "pending":
             raise FingerprintError("already_dispatched", "挑战已进入发送阶段，不会重复发送。")
