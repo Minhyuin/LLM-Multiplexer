@@ -19,74 +19,74 @@
     {
       "path": "LICENSE",
       "role": "license",
-      "size": 1085,
-      "sha256": "4812aaf2fc8971c97c8e054f7cecb16486f903d5c5b181ea48304c12182a11e7"
+      "size": 1064,
+      "sha256": "238afb57e498990742f84b9ce6167b4e256ac06104a9938ce953bc41c14bea51"
     },
     {
       "path": "sdk/python/pyproject.toml",
       "role": "sdk",
-      "size": 559,
-      "sha256": "a0f9c5601ca019c38ea04946ae1b7f1d102ea6f663a6b6e7d9b85f9401e27ecf"
+      "size": 538,
+      "sha256": "62e5cfedc9c4427ea662702d00ecd86012156bc23c7b9077b19bd95c6e2c3801"
     },
     {
       "path": "sdk/python/README.md",
       "role": "sdk",
-      "size": 4774,
-      "sha256": "a7225f1911ee3fbb9005469412288de21b071f3dba600ed2b176e4c57eab200b"
+      "size": 4690,
+      "sha256": "1867b6110e40c78339e4f92e9ae46c5cfc79ee70e597ee9354d58a75f432146c"
     },
     {
       "path": "sdk/python/src/lmfpd/__init__.py",
       "role": "sdk",
-      "size": 6475,
-      "sha256": "af5c78ad5db1176e21a1dc187d65b6cdf5f70f9c42dffa6d7b60467299e51d34"
+      "size": 6355,
+      "sha256": "fa6981aab002763aad334ebbfc9b8361ac29b2e8b6ae33d625d6f705d6850fa3"
     },
     {
       "path": "sdk/python/src/lmfpd/_analysis.py",
       "role": "sdk",
-      "size": 9244,
-      "sha256": "e43cadeb39a240a5313dd73a9d532a60d015434d2f2c6b0a7f0b7c4ba8238864"
+      "size": 9082,
+      "sha256": "814b393350a004cc03300b73019dedadd37ad516a46ae7edacd7c02b4559302d"
     },
     {
       "path": "sdk/python/src/lmfpd/_challenge.py",
       "role": "sdk",
-      "size": 1689,
-      "sha256": "0850754f8c70faab3ca05352851349f2dfd75cf99f612e2ad688ebf2899971a2"
+      "size": 1651,
+      "sha256": "858d4bc63ad1295c445628766992326d7084e5f933d2007d41915fcd51494380"
     },
     {
       "path": "sdk/python/src/lmfpd/_codec.py",
       "role": "sdk",
-      "size": 1243,
-      "sha256": "501398c4beccb6a2bb60c2b500632fcb79c3643e85b000686aa6a01ef0eff84b"
+      "size": 1213,
+      "sha256": "2c0479e89dd7ea125865c41983b6ca5df3be904705ff1159e2992bcfa913df0f"
     },
     {
       "path": "sdk/python/src/lmfpd/_data.py",
       "role": "sdk",
-      "size": 8205,
-      "sha256": "4b6b81fa8583ea968d88e5fadf3285daf9df1ab9e88fba2325619d444440399c"
+      "size": 8022,
+      "sha256": "5822fcdab0ee8b5a221983e4404738a7296de5033dd175cc2a9674e781f19c98"
     },
     {
       "path": "sdk/python/src/lmfpd/_features.py",
       "role": "sdk",
-      "size": 5576,
-      "sha256": "2ec1c805418eafa3e371f6877d6090c2a465997ba512772388829ad961ab3b40"
+      "size": 5434,
+      "sha256": "d478f31e9301872a869df7a85c55d1eb0d7349bae4c28f30d110b1f3ebd9d297"
     },
     {
       "path": "sdk/python/src/lmfpd/_ranker.py",
       "role": "sdk",
-      "size": 7907,
-      "sha256": "3ab970f2dd80481b359d0bc32259c42b2e2fa587e5da322ed7f11fda49eb40a6"
+      "size": 7753,
+      "sha256": "31066246f4b123ceff0d9db7a6f7ec193eea286407b3313da6b2fa3ce99a9486"
     },
     {
       "path": "sdk/python/src/lmfpd/_sampling.py",
       "role": "sdk",
-      "size": 23255,
-      "sha256": "2473da3a2c4a6dcf69efdc2d361c5747175ef5a3ecae6d9830045fcd1c1a7c30"
+      "size": 22745,
+      "sha256": "de7e3b442512a39316fce309b6c2c74a1c02d67789269dee8afffaec76fe6f0d"
     },
     {
       "path": "sdk/python/src/lmfpd/_types.py",
       "role": "sdk",
-      "size": 2951,
-      "sha256": "061ad07748adbbf64d9a2904ffa4fa6c3d3a97bb8183e61a73e96c854861f200"
+      "size": 2842,
+      "sha256": "4a594f6b428d7c89a57313d9e1dbff9650f0e89b2e8439b7ef2586747037b6ea"
     },
     {
       "path": "sdk/python/src/lmfpd/py.typed",
@@ -97,14 +97,14 @@
     {
       "path": "sdk/python/src/lmfpd/templates.json",
       "role": "sdk",
-      "size": 12187,
-      "sha256": "db686b9435e9a1d819443c51becee0fb87c524b521e495cb2752f43f482faf71"
+      "size": 12013,
+      "sha256": "b3af91a3f889a534638308221cc3db3cada36f68395fdc75ed71a9571ac2c5df"
     },
     {
       "path": "data/unified_bank.json",
       "role": "reference-data",
-      "size": 13852009,
-      "sha256": "5e0e3bffa6b708b16fc512fd521d41de2de03afc6c734dbc3ac1eceb7cb49db3"
+      "size": 12928618,
+      "sha256": "7117831989ca8e1793cd954899ec5f614541a37ea65a4174b711f80e6036fb1b"
     },
     {
       "path": "data/shared_detector.bin",
@@ -131,6 +131,6 @@
     "/data/unified_bank.json",
     "/data/shared_detector.bin"
   ],
-  "generated_by": "scripts/prepare_fingerprint.py init",
+  "generated_by": "scripts/prepare_fingerprint.py manifest (committed blobs)",
   "generated_at": "2026-10-27T09:22:50Z"
 }

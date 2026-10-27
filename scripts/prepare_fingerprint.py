@@ -101,6 +101,16 @@ def git(cwd: Path, *args: str, check: bool = True) -> str:
     return run(["git", "-C", str(cwd), *args], check=check).stdout.strip()
 
 
+def git_blob(cwd: Path, commit: str, relpath: str) -> bytes:
+    """Read exact committed bytes; checkout newline conversions must not enter a lock."""
+    proc = subprocess.run(["git", "-C", str(cwd), "cat-file", "blob", f"{commit}:{relpath}"],
+                          capture_output=True)
+    if proc.returncode:
+        raise Failure(f"cannot read committed blob {commit}:{relpath}: "
+                      + proc.stderr.decode("utf-8", errors="replace").strip())
+    return proc.stdout
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -180,6 +190,9 @@ def apply_sparse(sub: Path, patterns: list[str]) -> None:
     target = sparse_checkout_dir(sub)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(patterns) + "\n", encoding="utf-8")
+    # Hashes describe committed bytes, not platform-dependent checkout filters.
+    git(sub, "config", "core.autocrlf", "false")
+    git(sub, "config", "core.eol", "lf")
     git(sub, "config", "core.sparseCheckout", "true")
     git(sub, "config", "core.sparseCheckoutCone", "false")
     git(sub, "read-tree", "-mu", "HEAD")
@@ -197,6 +210,9 @@ def bounded_git_checkout(sub: Path, lock: dict) -> None:
         sub.mkdir(parents=True, exist_ok=True)
         git(sub, "init", "-q")
     patterns = list(lock["sparse_patterns"])
+    # Hashes describe committed bytes, not platform-dependent checkout filters.
+    git(sub, "config", "core.autocrlf", "false")
+    git(sub, "config", "core.eol", "lf")
     git(sub, "config", "core.sparseCheckout", "true")
     git(sub, "config", "core.sparseCheckoutCone", "false")
     sparse_checkout_dir(sub).parent.mkdir(parents=True, exist_ok=True)
@@ -461,21 +477,18 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
 
 
 def expand_spec(sub: Path) -> list[tuple[str, str]]:
-    """Expand MANIFEST_SPEC against a checked-out tree, in spec order."""
+    """Expand the whitelist from committed paths, excluding local caches and edits."""
+    committed = set(git(sub, "ls-tree", "-r", "--name-only", "HEAD").splitlines())
     entries: list[tuple[str, str]] = []
     for role, spec in MANIFEST_SPEC:
         if spec.endswith("/**"):
-            directory = sub / spec[:-3]
-            if not directory.is_dir():
-                raise Failure(f"manifest spec {spec!r} matches nothing ({directory} is missing)")
-            for path in sorted(directory.rglob("*")):
-                if path.is_file():
-                    entries.append((role, path.relative_to(sub).as_posix()))
+            prefix = spec[:-3] + "/"
+            matches = sorted(path for path in committed if path.startswith(prefix))
         else:
-            path = sub / spec
-            if not path.is_file():
-                raise Failure(f"manifest spec {spec!r} matches nothing ({path} is missing)")
-            entries.append((role, spec))
+            matches = [spec] if spec in committed else []
+        if not matches:
+            raise Failure(f"manifest spec {spec!r} matches no committed file")
+        entries.extend((role, path) for path in matches)
     return entries
 
 
@@ -530,8 +543,8 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         raise Failure(f"checked-out commit {head} is not the pinned {lock['upstream']['commit']}; run checkout first")
     files = []
     for role, relpath in expand_spec(sub):
-        target = sub / relpath
-        files.append({"path": relpath, "role": role, "size": target.stat().st_size, "sha256": sha256_file(target)})
+        body = git_blob(sub, head, relpath)
+        files.append({"path": relpath, "role": role, "size": len(body), "sha256": sha256_bytes(body)})
     lock["files"] = files
     lock["sparse_patterns"] = ["/" + entry["path"] for entry in files]
     if args.timestamp:

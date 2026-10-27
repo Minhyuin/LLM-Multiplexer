@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Verify dependency manifests use committed bytes
+        run: python scripts/test_prepare_fingerprint.py
+
       # The detector is a pinned submodule: materialise it at the lock commit.
       # Nothing is installed from upstream and no wheel is fetched from an index.
       - name: Materialise pinned detector dependency
