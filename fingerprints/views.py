@@ -13,7 +13,7 @@ from core.utils import is_portal_admin
 from users.middleware import get_real_user
 from .config import FingerprintError, enabled, limit, model_policy
 from .models import FingerprintRun
-from .services import cancel_run, create_run, quota_for, usable_keys
+from .services import cancel_run, create_run, owner_display_name, quota_for, usable_keys
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def state(request):
     history = runs.exclude(status__in=FingerprintRun.ACTIVE)[:limit("HISTORY_LIMIT", 200)]
     return {"enabled": True, "read_only": preview,
             "keys": [{"id": k.pk, "name": k.name, "masked": k.token_masked,
-                      "owner": k.user.username if k.user_id != user.pk else ""} for k in usable_keys(user)] if not preview else [],
+                      "owner": owner_display_name(k.user) if k.user_id != user.pk else ""} for k in usable_keys(user)] if not preview else [],
             "quota": quota_for(user), "active": serialize(active) if active else None, "history": [serialize(r) for r in history]}
 
 

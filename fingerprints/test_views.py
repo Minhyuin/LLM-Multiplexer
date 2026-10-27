@@ -430,6 +430,17 @@ class AdminKeyChoiceTests(FingerprintViewTestCase):
         self.assertNotIn(member_key.token_plaintext, body)
         self.assertNotIn(member_key.token_hash, body)
 
+    def test_admin_payload_uses_the_member_display_name(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        member, member_key = self.member("alice")
+        member.profile.display_name = "爱丽丝"
+        member.profile.save()
+        self.login(admin)
+
+        keys = {row["id"]: row for row in self.client.get(self.state_url).json()["keys"]}
+        self.assertEqual(keys[member_key.pk]["owner"], "爱丽丝")
+        self.assertEqual(keys[member_key.pk]["masked"], member_key.token_masked)
+
     def test_a_member_state_never_names_other_owners(self):
         user, key = self.member("alice")
         self.member("bob")
@@ -485,14 +496,14 @@ class IntroTemplateTests(TestCase):
     def test_admin_wording_names_the_owner_and_the_billing_target(self):
         html = self.render(fingerprint_admin_choice=True)
         self.assertIn('data-fp-admin-choice="1"', html)
-        self.assertIn("按用户名", html)
+        self.assertIn("按显示名", html)
         self.assertIn("用量计入该 key 所属用户的账单", html)
 
     def test_member_wording_stays_self_scoped(self):
         html = self.render(fingerprint_admin_choice=False)
         self.assertNotIn("data-fp-admin-choice", html)
         self.assertIn("使用本人所选 key", html)
-        self.assertNotIn("按用户名", html)
+        self.assertNotIn("按显示名", html)
 
 
 @override_settings(FINGERPRINT_ENABLED=True, FINGERPRINT_MODEL_POLICIES=MODEL_POLICIES)

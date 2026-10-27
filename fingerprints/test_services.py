@@ -251,12 +251,34 @@ class AdminKeyChoiceTests(FingerprintServiceTestCase):
         admin = self.make_user("root-admin", is_staff=True)
         alice, key = self.owner("alice")
 
-        run, reused = services.create_run(admin, key.pk, MODEL, uuid.uuid4())
-        self.assertFalse(reused)
-        self.assertEqual((run.user_id, run.api_key_id), (admin.pk, key.pk))
-        self.assertEqual(run.key_label, f"alice · {key.token_masked}")
-        self.assertEqual(self.counter(admin).reserved, 1)
+        with frozen(NOW):
+            run, reused = services.create_run(admin, key.pk, MODEL, uuid.uuid4())
+            self.assertFalse(reused)
+            self.assertEqual((run.user_id, run.api_key_id), (admin.pk, key.pk))
+            self.assertEqual(run.key_label, f"alice · {key.token_masked}")
+            self.assertEqual(self.counter(admin).reserved, 1)
         self.assertFalse(FingerprintQuotaDay.objects.filter(user=alice).exists())
+
+    def test_admin_sees_the_member_display_name_and_a_name_sorted_list(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        alice, alice_key = self.owner("alice")
+        alice.profile.display_name = "爱丽丝"
+        alice.profile.save()
+        bob, bob_key = self.owner("bob")
+        bob.profile.display_name = "Bob Zhang"
+        bob.profile.save()
+
+        self.assertEqual([key.pk for key in services.usable_keys(admin)], [bob_key.pk, alice_key.pk])
+        run, _ = services.create_run(admin, alice_key.pk, MODEL, uuid.uuid4())
+        self.assertEqual(run.key_label, f"爱丽丝 · {alice_key.token_masked}")
+
+    def test_a_member_without_a_display_name_falls_back_to_the_username(self):
+        admin = self.make_user("root-admin", is_staff=True)
+        carol, carol_key = self.owner("carol")
+
+        self.assertEqual(services.owner_display_name(carol), "carol")
+        run, _ = services.create_run(admin, carol_key.pk, MODEL, uuid.uuid4())
+        self.assertEqual(run.key_label, f"carol · {carol_key.token_masked}")
 
     def test_worker_dispatches_with_the_pinned_member_key(self):
         admin = self.make_user("root-admin", is_staff=True)
@@ -333,24 +355,26 @@ class AdmissionTests(FingerprintServiceTestCase):
     def test_repeated_click_with_the_same_idempotency_key_returns_the_same_run(self):
         user, key = self.owner()
         identity = uuid.uuid4()
-        first, first_reused = services.create_run(user, key.pk, MODEL, identity)
-        second, second_reused = services.create_run(user, key.pk, MODEL, identity)
+        with frozen(NOW):
+            first, first_reused = services.create_run(user, key.pk, MODEL, identity)
+            second, second_reused = services.create_run(user, key.pk, MODEL, identity)
 
-        self.assertFalse(first_reused)
-        self.assertTrue(second_reused)
-        self.assertEqual(first.pk, second.pk)
-        self.assertEqual(FingerprintRun.objects.count(), 1)
-        self.assertEqual(self.counter(user).reserved, 1)
+            self.assertFalse(first_reused)
+            self.assertTrue(second_reused)
+            self.assertEqual(first.pk, second.pk)
+            self.assertEqual(FingerprintRun.objects.count(), 1)
+            self.assertEqual(self.counter(user).reserved, 1)
 
     def test_one_active_run_per_member_short_circuits_a_second_start(self):
         user, key = self.owner()
-        first = self.dispatch(user, key)
-        second, reused = services.create_run(user, key.pk, MODEL, uuid.uuid4())
+        with frozen(NOW):
+            first = self.dispatch(user, key)
+            second, reused = services.create_run(user, key.pk, MODEL, uuid.uuid4())
 
-        self.assertTrue(reused)
-        self.assertEqual(first.pk, second.pk)
-        self.assertEqual(FingerprintRun.objects.count(), 1)
-        self.assertEqual(self.counter(user).reserved, 1)
+            self.assertTrue(reused)
+            self.assertEqual(first.pk, second.pk)
+            self.assertEqual(FingerprintRun.objects.count(), 1)
+            self.assertEqual(self.counter(user).reserved, 1)
 
     def test_database_constraints_enforce_idempotency_and_single_active_run(self):
         user, key = self.owner()
@@ -459,8 +483,8 @@ class QuotaTests(FingerprintServiceTestCase):
             services.finish_run(run.pk, claimed.lease_token, FingerprintRun.FAILED, "upstream_error",
                                 "上游返回错误，未自动重试。")
             counter = self.counter(user)
-        self.assertEqual((counter.used, counter.reserved), (1, 0))
-        self.assertEqual(services.quota_for(user)["remaining"], 2)
+            self.assertEqual((counter.used, counter.reserved), (1, 0))
+            self.assertEqual(services.quota_for(user)["remaining"], 2)
 
     def test_finishing_without_dispatch_refunds_the_reservation(self):
         user, key = self.owner()

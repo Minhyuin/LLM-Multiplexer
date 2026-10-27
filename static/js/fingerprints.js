@@ -148,6 +148,13 @@
         return trimZeros(value.toFixed(2));
     }
 
+    // 契约里 probability 是 [0,1] 的比例；超过 1 视为服务端已给百分比。
+    function probabilityRatio(value) {
+        if (!isNumber(value) || value < 0) { return null; }
+        var ratio = value <= 1 ? value : value / 100;
+        return Math.max(0, Math.min(1, ratio));
+    }
+
     function cookie(name) {
         var parts = ('; ' + document.cookie).split('; ' + name + '=');
         if (parts.length === 2) { return parts.pop().split(';').shift(); }
@@ -309,7 +316,8 @@
         if (!key) { return ''; }
         var own = (typeof key.masked === 'string' && key.masked) ? key.masked
             : ((typeof key.name === 'string' && key.name) ? key.name : '未命名 key');
-        if (typeof key.owner === 'string' && key.owner) { return key.owner + ' · ' + own; }
+        // Admins pick a member by name; the option text is that name and nothing else.
+        if (typeof key.owner === 'string' && key.owner) { return key.owner; }
         return own;
     }
 
@@ -588,6 +596,25 @@
         }
     }
 
+    function appendProbability(cell, value) {
+        var ratio = probabilityRatio(value);
+        if (ratio === null) { text(cell, NA); return; }
+        var label = formatProbability(value);
+        var bar = document.createElement('span');
+        bar.className = 'fp-prob-bar';
+        bar.setAttribute('role', 'img');
+        bar.setAttribute('aria-label', '参考库内概率 ' + label);
+        var fill = document.createElement('span');
+        fill.className = 'fp-prob-fill';
+        fill.style.width = (Math.round(ratio * 1000) / 10) + '%';
+        bar.appendChild(fill);
+        var number = document.createElement('span');
+        number.className = 'fp-prob-value';
+        text(number, label);
+        cell.appendChild(bar);
+        cell.appendChild(number);
+    }
+
     function renderCandidates(result) {
         var list = Array.isArray(result.candidates) ? result.candidates.slice(0, 5) : [];
         var body = dom.candidatesBody;
@@ -616,7 +643,7 @@
             text(score, formatScore(candidate ? candidate.score : null));
             var probability = document.createElement('td');
             probability.className = 'fp-candidate-probability';
-            text(probability, formatProbability(candidate ? candidate.probability : null));
+            appendProbability(probability, candidate ? candidate.probability : null);
             row.appendChild(name);
             row.appendChild(score);
             row.appendChild(probability);

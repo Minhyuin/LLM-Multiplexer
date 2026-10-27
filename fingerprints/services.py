@@ -41,17 +41,28 @@ def quota_for(user, now=None):
             "next_allowed_at": (last + timedelta(seconds=limit("COOLDOWN_SECONDS", 60))).isoformat() if last else None}
 
 
+def owner_display_name(user):
+    """Members are known by their display name; the username is only the fallback."""
+    profile = getattr(user, "profile", None)
+    name = (getattr(profile, "display_name", "") or "").strip()
+    return name or user.username
+
+
 def usable_keys(user):
     now = timezone.now()
-    queryset = APIKey.objects.filter(status=APIKey.STATUS_ACTIVE).exclude(token_plaintext="")
-    if is_portal_admin(user):
+    admin = is_portal_admin(user)
+    queryset = APIKey.objects.filter(status=APIKey.STATUS_ACTIVE).exclude(token_plaintext="").select_related("user")
+    if admin:
         # Admins own no key of their own; they may test with any active member key.
         # The owner name is the only extra metadata exposed, never the plaintext.
-        queryset = queryset.select_related("user").filter(user__is_active=True)
+        queryset = queryset.filter(user__is_active=True)
     else:
         queryset = queryset.filter(user=user)
     keys = [key for key in queryset.order_by("user__username", "name", "id")
             if (not key.expires_at or key.expires_at > now) and APIKey.hash_token(key.token_plaintext) == key.token_hash]
+    if admin:
+        # The list is scanned by name, so sort by what the admin actually reads.
+        keys.sort(key=lambda key: (owner_display_name(key.user).casefold(), key.name or "", key.pk))
     return keys[:limit("KEY_CHOICES_LIMIT", 500)]
 
 
@@ -135,7 +146,7 @@ def key_label_for(actor, key):
     the stored label, so a run can never be mistaken for the admin's own traffic."""
     masked = key.token_masked or key.name or "key"
     if actor.pk != key.user_id:
-        return f"{key.user.username} · {masked}"[:160]
+        return f"{owner_display_name(key.user)} · {masked}"[:160]
     return f"{key.name} · {masked}"[:160] if key.name else masked[:160]
 
 

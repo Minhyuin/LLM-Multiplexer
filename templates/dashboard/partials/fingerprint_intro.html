@@ -6,7 +6,7 @@
       · 计费与额度说明（固定的短句，由模板给出，脚本不改写）
       · 今日剩余轮次（配额在列表上方，开始检测前就能看到）
       · 发起检测时使用的 key（脱敏标签，多 key 时可切换）
-      · 管理员账号没有自己的 key，改为按用户名列出成员 key 供选择
+      · 管理员账号没有自己的 key，改为按显示名列出成员 key 供选择
 
     这里不出现任何提交按钮：真正的「检测指纹」按钮在模型列表里点选条目后
     就地展开，避免在整屏模型上铺满收费入口。
@@ -29,7 +29,7 @@
     </div>
     <div class="fp-intro-controls">
         <label class="fp-control" for="fp-key-select">
-            <span class="fp-control-label">{% if fingerprint_admin_choice %}使用 key（按用户名）{% else %}使用 key{% endif %}</span>
+            <span class="fp-control-label">{% if fingerprint_admin_choice %}使用 key（按显示名）{% else %}使用 key{% endif %}</span>
             <select id="fp-key-select" class="fp-select" disabled>
                 <option value="">读取中…</option>
             </select>
