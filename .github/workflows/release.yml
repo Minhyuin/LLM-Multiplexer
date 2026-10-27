@@ -25,8 +25,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A manually pushed tag may not be in the checkout yet; the override check
+      # has to see every existing tag or it cannot prove uniqueness/ordering.
+      - name: Fetch tags
+        shell: bash
+        run: git fetch --tags --prune --quiet origin || true
+
+      # Single source of truth for "which version may this run tag".
+      #   mode=auto              -> unchanged conventional-commit behaviour
+      #   mode=override          -> an explicit `Release-As: 1.9.2` trailer was
+      #                             found, validated as unique and increasing;
+      #                             the tag step below must use it verbatim
+      #   mode=already-released  -> that exact tag already exists on this commit
+      #                             (idempotent re-run, nothing to tag)
+      # A malformed, duplicated, non-increasing or conflicting override fails
+      # HERE, before any tag object exists.
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: bash deployment/release/release_version.sh --commit "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
+
       - name: Detect existing semantic tags
         id: tags
+        if: steps.version.outputs.mode == 'auto'
         shell: bash
         run: |
           if git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -Eq '^v[1-9][0-9]*\.[0-9]+\.[0-9]+$'; then
@@ -38,7 +59,7 @@ jobs:
       # The first release is deliberately fixed at v1.0.0. Subsequent releases
       # use the same conventional-commit rules as the PinyCore workflow.
       - name: Create initial v1.0.0 release
-        if: steps.tags.outputs.has_semver_tags == 'false'
+        if: steps.version.outputs.mode == 'auto' && steps.tags.outputs.has_semver_tags == 'false'
         uses: ncipollo/release-action@v1
         with:
           tag: v1.0.0
@@ -48,7 +69,7 @@ jobs:
           makeLatest: true
 
       - name: Bump semantic version and push tag
-        if: steps.tags.outputs.has_semver_tags == 'true'
+        if: steps.version.outputs.mode == 'auto' && steps.tags.outputs.has_semver_tags == 'true'
         id: tag_version
         uses: mathieudutour/github-tag-action@v6.2
         with:
@@ -61,7 +82,7 @@ jobs:
           fetch_all_tags: true
 
       - name: Create GitHub release for bumped tag
-        if: steps.tags.outputs.has_semver_tags == 'true' && steps.tag_version.outputs.new_tag != ''
+        if: steps.version.outputs.mode == 'auto' && steps.tag_version.outputs.new_tag != ''
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ steps.tag_version.outputs.new_tag }}
@@ -69,3 +90,27 @@ jobs:
           body: ${{ steps.tag_version.outputs.changelog }}
           makeLatest: true
           generateReleaseNotes: true
+
+      # The explicit version is what actually creates the tag: ncipollo tags the
+      # given commit when that tag does not exist yet. No bump action runs on
+      # this path, so 1.10.0 can never be produced for this commit.
+      - name: Create release with the explicit Release-As version
+        if: steps.version.outputs.mode == 'override'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          commit: ${{ github.sha }}
+          body: |
+            Explicit release version for this commit.
+
+            Requested by a `Release-As: ${{ steps.version.outputs.version }}` trailer.
+            Previous release: ${{ steps.version.outputs.previous }}
+          generateReleaseNotes: true
+          makeLatest: true
+
+      - name: Record the already-published tag
+        if: steps.version.outputs.mode == 'already-released'
+        shell: bash
+        run: |
+          echo "::notice::Tag ${{ steps.version.outputs.tag }} already exists on $GITHUB_SHA; nothing was tagged or published."

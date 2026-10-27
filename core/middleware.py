@@ -26,4 +26,7 @@ class PortalLoginRequiredMiddleware:
             return None
         if request.resolver_match.view_name in self.public_view_names:
             return None
+        # These views enforce authentication themselves and return JSON on expiry.
+        if getattr(view_func, "portal_json_auth", False):
+            return None
         return redirect_to_login(request.get_full_path(), settings.LOGIN_URL)

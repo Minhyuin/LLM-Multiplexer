@@ -13,6 +13,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: portal_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -26,13 +40,57 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      # The detector is a pinned submodule: materialise it at the lock commit.
+      # Nothing is installed from upstream and no wheel is fetched from an index.
+      - name: Materialise pinned detector dependency
+        run: python scripts/prepare_fingerprint.py checkout
+
+      # Fails when the working tree, the SDK file hashes, the submodule HEAD or
+      # the committed gitlink disagree with scripts/lm-detector_lock.json.
+      - name: Verify pinned dependency matches the lock
+        run: python scripts/prepare_fingerprint.py verify --require-gitlink
+
+      # Build the SDK wheel from the verified tree and install it with --no-deps,
+      # so a missing runtime dependency shows up as an import failure below
+      # instead of being silently satisfied by pip.
+      - name: Build and install the SDK wheel
+        run: |
+          python scripts/build_sdk_wheel.py --python python --wheelhouse build/wheels
+          python -m pip install --no-index --force-reinstall --no-deps build/wheels/lmfpd-*.whl
+
+      # Scores the pinned bank with sockets disabled: this is the check that the
+      # CI interpreter can actually run fingerprint jobs offline.
+      - name: Verify installed SDK offline
+        run: python scripts/verify_sdk_runtime.py
+
       - name: Django system checks
         env:
           DJANGO_SETTINGS_MODULE: lab_portal.settings_test
         run: python manage.py check
+
+      # The release workflow tags whatever this script allows; prove the gate
+      # (auto / override / already-released / refusals) before it can be used.
+      - name: Test the release version gate
+        run: bash deployment/release/test_release_version.sh
+
+      - name: Verify isolated deploy and rollback scenarios
+        run: |
+          python deployment/gateway/test_fingerprint_deploy.py --prepare "$RUNNER_TEMP/fingerprint-deploy"
+          bash "$RUNNER_TEMP/fingerprint-deploy/run-all.sh"
+          python deployment/gateway/test_fingerprint_deploy.py --check "$RUNNER_TEMP/fingerprint-deploy"
+
+      # A model change without its migration must fail before it reaches a box.
+      - name: Check migrations are complete
+        env:
+          DJANGO_SETTINGS_MODULE: lab_portal.settings_test
+        run: python manage.py makemigrations --check --dry-run
 
       - name: Run tests
         env:
           DJANGO_SETTINGS_MODULE: lab_portal.settings_test
         run: python manage.py test --noinput
 
+      - name: Verify PostgreSQL locks and queue lifecycle
+        env:
+          DJANGO_SETTINGS_MODULE: lab_portal.settings_test_postgres
+        run: python manage.py test fingerprints --noinput

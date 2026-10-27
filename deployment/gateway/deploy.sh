@@ -81,6 +81,66 @@ log() {
 die() { log "ERROR: $*"; exit 1; }
 
 # ---------------------------------------------------------------------------
+# 0a. v1.9.2 feature hook: the portal-owned fingerprint worker
+#
+#     The worker runs from its own systemd unit and resolves its code through the
+#     same stable symlink as gunicorn. A deploy therefore has to stop it BEFORE
+#     the symlink flips (a worker left running would keep executing the retired
+#     tree, and its children would keep talking to a schema that is about to
+#     change) and start it again only AFTER the candidate passed the health check.
+#
+#     WORKER_SERVICE="" turns the whole hook off, which is the correct setting on
+#     a host that never installed the unit. Everything else here stays inert while
+#     the feature is disabled: a release without the worker command is still
+#     deployable, it just reports that the worker remains stopped.
+# ---------------------------------------------------------------------------
+WORKER_SERVICE="${WORKER_SERVICE:-}"
+SKIP_FINGERPRINT_DEPS="${SKIP_FINGERPRINT_DEPS:-0}"
+SKIP_SDK_RUNTIME_CHECK="${SKIP_SDK_RUNTIME_CHECK:-0}"
+FP_LOCK="scripts/lm-detector_lock.json"
+
+enabled_flag() {                     # $1 = a boolean-looking environment value
+  case "$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+portal_flag_enabled() {              # FINGERPRINT_ENABLED as the PORTAL reads it
+  [ -f "$ENV_FILE" ] || return 1
+  enabled_flag "$(sed -nE 's/^FINGERPRINT_ENABLED=//p' "$ENV_FILE" | tail -1 | tr -d "\"' ")"
+}
+
+worker_unit_installed() {
+  [ -n "$WORKER_SERVICE" ] || return 1
+  systemctl cat "$WORKER_SERVICE" >/dev/null 2>&1
+}
+
+fingerprint_feature_in() {           # $1 = a release directory
+  [ -f "$1/fingerprints/management/commands/run_fingerprint_worker.py" ]
+}
+
+# The SDK wheel and the reference bank come from a pinned upstream commit. A
+# release only counts as "fingerprint capable" when the audited lock and the two
+# scripts that consume it are present; that keeps older releases deployable and
+# rollbacks honest.
+fingerprint_dependency_in() {        # $1 = a release directory
+  [ -f "$1/$FP_LOCK" ] && [ -f "$1/scripts/prepare_fingerprint.py" ] && [ -f "$1/scripts/build_sdk_wheel.py" ]
+}
+
+# Interruption between "worker stopped" and "symlink flipped" must not leave the
+# feature silently off on the old release: the code path never changed, so the
+# only repair needed is starting the worker again.
+worker_stopped_interrupt() {
+  trap - INT TERM
+  log "interrupted after ${WORKER_SERVICE} was stopped and before activation — restarting it on the live release"
+  systemctl start "$WORKER_SERVICE" >/dev/null 2>&1 \
+    || log "WARNING: could not restart $WORKER_SERVICE; start it by hand"
+  rm -rf -- "${RELEASE_DIR}.tmp" "${BUILD_DIR}" "${WHEELHOUSE}"
+  exit 130
+}
+
+# ---------------------------------------------------------------------------
 # 0. recovery for the bootstrap failure mode.
 #
 #    --convert lifts .env / media out of the code tree; each release owns its
@@ -169,6 +229,12 @@ preflight() {
   [ -f "$ENV_FILE" ]          || { log "preflight: MISSING $ENV_FILE"; rc=1; }
   systemctl cat "$SERVICE" >/dev/null 2>&1 || { log "preflight: MISSING systemd unit $SERVICE"; rc=1; }
   [ -L "$APP_LINK" ] || log "preflight: NOTE $APP_LINK is not a symlink yet (first deploy will convert it)"
+  # Fail fast instead of after a full build: a switched-on feature with no worker
+  # unit would activate code that can never execute a detection.
+  if portal_flag_enabled && ! worker_unit_installed; then
+    log "preflight: FINGERPRINT_ENABLED is on in $ENV_FILE but worker unit '${WORKER_SERVICE:-<WORKER_SERVICE unset>}' is not installed"
+    rc=1
+  fi
   return $rc
 }
 
@@ -278,6 +344,9 @@ if [ "$MODE" = "check" ]; then
   log "check: app_link=$APP_LINK -> $(readlink -f "$APP_LINK" 2>/dev/null || echo '(not a symlink)')"
   log "check: currently deployed tag = '$(current_tag)'"
   log "check: health checks = $HEALTH_CHECKS"
+  log "check: worker service = '${WORKER_SERVICE:-<disabled>}' (installed: $(worker_unit_installed && echo yes || echo no))"
+  log "check: portal FINGERPRINT_ENABLED = $(portal_flag_enabled && echo on || echo off)"
+  log "check: pinned fingerprint dependency = $(fingerprint_dependency_in "$(readlink -f "$APP_LINK" 2>/dev/null || echo /nonexistent)" && echo present || echo absent)"
   log "check: remote tags reachable:"
   remote_tags | sed 's/^/        /' || true
   log "check: OK (nothing was changed)"
@@ -342,6 +411,30 @@ rm -rf "$BUILD_DIR" "$WHEELHOUSE"
 mkdir -p "$BUILD_DIR" "$WHEELHOUSE"
 
 FAIL_REASON=""
+# A rollback must not leave the feature half-alive: the worker is restarted
+# against the restored tree and its state is reported. It is deliberately
+# best-effort — the portal serving again is what a rollback is for, and an
+# uninstalled unit or a release without the worker command is not a failure.
+restore_worker_after_rollback() {
+  local prev="$1"
+  [ -n "$WORKER_SERVICE" ] || return 0
+  if ! worker_unit_installed; then
+    log "rollback: worker unit $WORKER_SERVICE is not installed — nothing to restart"
+    return 0
+  fi
+  if ! portal_flag_enabled || ! fingerprint_feature_in "$prev"; then
+    log "rollback: fingerprint is disabled or ${prev##*/} has no worker command — leaving $WORKER_SERVICE stopped"
+    systemctl stop "$WORKER_SERVICE" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if systemctl restart "$WORKER_SERVICE" >/dev/null 2>&1 && systemctl is-active --quiet "$WORKER_SERVICE"; then
+    log "rollback: $WORKER_SERVICE restarted on ${prev##*/}"
+  else
+    log "WARNING: $WORKER_SERVICE did not come back after the rollback — fingerprint detection stays down until it is started by hand"
+  fi
+  return 0
+}
+
 flip_back() {
   local prev rc
   # Prefer the target captured immediately before this run's flip. The
@@ -354,12 +447,22 @@ flip_back() {
     "${RELEASES_DIR}"/*) [ -d "$prev" ] || { log "rollback target is not an existing release: $prev"; return 1; } ;;
     *) log "rollback target is outside releases directory: $prev"; return 1 ;;
   esac
+  # A candidate worker may already have started before its health check failed.
+  # Stop and verify it before retiring its code, including during rollback.
+  if worker_unit_installed; then
+    systemctl stop "$WORKER_SERVICE" || { log "rollback: cannot stop $WORKER_SERVICE; refusing to switch code"; return 1; }
+    if systemctl is-active --quiet "$WORKER_SERVICE"; then
+      log "rollback: $WORKER_SERVICE is still active; refusing to switch code"
+      return 1
+    fi
+  fi
   ln -sfn "$prev" "${APP_LINK}.new" && mv -Tf "${APP_LINK}.new" "$APP_LINK"
   systemctl restart "$SERVICE"
   # systemctl returns as soon as the process is started, which is a second or
   # two before gunicorn answers. Without waiting here there is a brief window
   # where the portal returns 502 to real users; a rollback must not leave one.
   if health_check quiet; then
+    restore_worker_after_rollback "$prev"
     log "ROLLED BACK to $(basename "$prev") (serving again)"
     return 0
   else
@@ -367,6 +470,64 @@ flip_back() {
     log "ROLLED BACK to $(basename "$prev") but it is NOT healthy either — manual attention required"
     return "$rc"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# 3b. pinned fingerprint dependency (v1.9.2)
+#
+#     A tag tarball from codeload contains no submodule content — gitlinks are
+#     not archived — so the audited whitelist has to be materialised here. Every
+#     step fails the deploy while the OLD release is still serving, which is the
+#     whole point of doing it during the staging phase:
+#
+#       bootstrap  fetch exactly the files named in scripts/lm-detector_lock.json
+#                  over HTTPS, refusing redirects and verifying size + SHA-256
+#       verify     fail closed on a missing file, a hash mismatch, a file outside
+#                  the whitelist or a gitlink that points elsewhere
+#       wheel      build lmfpd from the verified source and prove the wheel's
+#                  modules are the locked bytes
+#
+#     Nothing here follows main/latest, accepts another repository, or writes
+#     outside the staged release and the wheelhouse.
+# ---------------------------------------------------------------------------
+SDK_VERSION=""
+SDK_WHEEL=""
+FP_DEPENDENCY_STAGED=0
+
+materialise_fingerprint_dependency() {
+  local stage="$1" manifest wheel_name wheel_sha
+  [ -f "$stage/scripts/prepare_fingerprint.py" ] || die "fingerprint lock is present but scripts/prepare_fingerprint.py is missing from ${LATEST}"
+  [ -f "$stage/scripts/build_sdk_wheel.py" ]      || die "fingerprint lock is present but scripts/build_sdk_wheel.py is missing from ${LATEST}"
+
+  log "materialising the pinned lm-detector dependency (whitelist only)"
+  ( cd "$stage" && python3 scripts/prepare_fingerprint.py --repo-root "$stage" bootstrap ) >>"$BUILD_LOG" 2>&1 \
+    || die "fingerprint dependency bootstrap failed for ${LATEST} — see ${BUILD_LOG} (nothing live was changed)"
+  ( cd "$stage" && python3 scripts/prepare_fingerprint.py --repo-root "$stage" verify ) >>"$BUILD_LOG" 2>&1 \
+    || die "fingerprint dependency does not match ${FP_LOCK} for ${LATEST} — see ${BUILD_LOG} (missing file, size or hash mismatch)"
+  log "fingerprint dependency verified against ${FP_LOCK}"
+
+  ( cd "$stage" && python3 scripts/build_sdk_wheel.py --repo-root "$stage" \
+      --wheelhouse "$WHEELHOUSE" --build-dir "${BUILD_DIR}/sdk-wheel" ) >>"$BUILD_LOG" 2>&1 \
+    || die "lmfpd wheel build failed for ${LATEST} — see ${BUILD_LOG}"
+
+  manifest="${WHEELHOUSE}/lm-detector-wheel.json"
+  [ -f "$manifest" ] || die "the lmfpd wheel build produced no ${manifest}"
+  # The manifest is the only source of the wheel's identity; read it with the
+  # same interpreter that wrote it rather than with sed on JSON.
+  read -r wheel_name wheel_sha SDK_VERSION <<<"$(python3 - "$manifest" <<'PY'
+import json, sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+print(record["filename"], record["sha256"], record["sdk_version"])
+PY
+)"
+  [ -n "$wheel_name" ] && [ -n "$wheel_sha" ] && [ -n "$SDK_VERSION" ] \
+    || die "${manifest} does not describe a wheel (filename/sha256/sdk_version)"
+  SDK_WHEEL="${WHEELHOUSE}/${wheel_name}"
+  [ -f "$SDK_WHEEL" ] || die "the lmfpd wheel named in ${manifest} is missing: ${SDK_WHEEL}"
+  [ "$(sha256sum "$SDK_WHEEL" | awk '{print $1}')" = "$wheel_sha" ] \
+    || die "the staged lmfpd wheel does not match its own manifest (${wheel_name})"
+  log "lmfpd ${SDK_VERSION} wheel staged and hash-verified: ${wheel_name}"
+  FP_DEPENDENCY_STAGED=1
 }
 
 # ---------------------------------------------------------------------------
@@ -438,13 +599,29 @@ build_release() {
     echo "sha256_src=$(sha256sum "$tarball" | awk '{print $1}')"
   } > "$RELEASE_DIR.tmp/.release"
 
-  # Build wheels outside the live release. The venv is created only after the
-  # tree reaches its final absolute path: venv entrypoint shebangs embed paths.
+  # --- pinned dependency of the v1.9.2 fingerprint worker -------------------
+  # Runs before any wheel is resolved, because the release venv installs lmfpd
+  # from this wheelhouse and never from an index.
+  FP_DEPENDENCY_STAGED=0
+  if [ "$SKIP_FINGERPRINT_DEPS" = "1" ]; then
+    log "SKIP_FINGERPRINT_DEPS=1: not materialising the pinned lm-detector dependency"
+  elif fingerprint_dependency_in "$RELEASE_DIR.tmp"; then
+    materialise_fingerprint_dependency "$RELEASE_DIR.tmp"
+  else
+    log "no ${FP_LOCK} in ${LATEST} — the release does not ship the fingerprint dependency"
+  fi
+
+  # Build pinned runtime dependencies outside the live release. lmfpd is not
+  # resolved by package name: its verified artifact is installed directly below.
+  # The venv is created at its final path because entrypoint shebangs embed it.
   if [ -f "$RELEASE_DIR.tmp/requirements.txt" ]; then
     python3 -m pip wheel -q -r "$RELEASE_DIR.tmp/requirements.txt" \
-        -w "$WHEELHOUSE" >>"$BUILD_LOG" 2>&1 \
+        --find-links "$WHEELHOUSE" -w "$WHEELHOUSE" >>"$BUILD_LOG" 2>&1 \
       || die "pip wheel failed for ${LATEST} (see $BUILD_LOG)"
   fi
+
+  # SDK runtime dependencies are pinned in requirements.txt and already staged.
+  # Never resolve lmfpd by name while an index is enabled; only SDK_WHEEL is trusted.
 
   if [ -e "$RELEASE_DIR" ] || [ -L "$RELEASE_DIR" ]; then
     die "release directory ${RELEASE_DIR} already exists — refusing to overwrite it. A hand-rolled or concurrent deploy may be using it; remove it deliberately first."
@@ -462,6 +639,30 @@ build_release() {
   "${RELEASE_VENV}/bin/python" -m pip install -q --upgrade --no-index \
       --find-links "$WHEELHOUSE" -r "$RELEASE_DIR/requirements.txt" >>"$BUILD_LOG" 2>&1 \
     || { rm -rf -- "$RELEASE_DIR"; die "pip install failed for ${LATEST} (see $BUILD_LOG)"; }
+  if [ "$FP_DEPENDENCY_STAGED" = "1" ]; then
+    # Install the exact reviewed artifact; dependencies were installed separately.
+    "${RELEASE_VENV}/bin/python" -m pip install -q --no-index --no-deps \
+        "$SDK_WHEEL" >>"$BUILD_LOG" 2>&1 \
+      || { rm -rf -- "$RELEASE_DIR"; die "installing the pinned lmfpd ${SDK_VERSION} wheel failed for ${LATEST} (see $BUILD_LOG)"; }
+    if [ "$SKIP_SDK_RUNTIME_CHECK" = "1" ]; then
+      log "SKIP_SDK_RUNTIME_CHECK=1: not verifying the lmfpd runtime in the release venv"
+    else
+      # Offline proof, in the exact interpreter that will run the worker, that
+      # the pinned detector loads the reference bank and scores a fixed sample.
+      ( cd "$RELEASE_DIR" && "${RELEASE_VENV}/bin/python" scripts/verify_sdk_runtime.py ) >>"$BUILD_LOG" 2>&1 \
+        || { rm -rf -- "$RELEASE_DIR"; die "lmfpd runtime verification failed in the release venv for ${LATEST} (see $BUILD_LOG)"; }
+      log "lmfpd runtime verified in the release-local venv (offline)"
+    fi
+    {
+      echo "sdk_version=${SDK_VERSION}"
+      echo "wheel=$(basename "$SDK_WHEEL")"
+      echo "wheel_sha256=$(sha256sum "$SDK_WHEEL" | awk '{print $1}')"
+      echo "lock=$(sed -nE 's/.*"commit": "([0-9a-f]{40})".*/\1/p' "$RELEASE_DIR/${FP_LOCK}" | head -1)"
+      echo "data_dir=third_party/lm-detector/data"
+      echo "runtime_verified=$([ "$SKIP_SDK_RUNTIME_CHECK" = "1" ] && echo skipped || echo yes)"
+      echo "materialised_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    } > "$RELEASE_DIR/.fingerprint-release"
+  fi
   log "dependencies verified in release-local venv"
   # shared, not part of the release and never overwritten by one
   for item in "${SHARED_ITEMS[@]}"; do
@@ -544,6 +745,28 @@ fi
   && "${RELEASE_DIR}/.venv/bin/python" manage.py collectstatic --noinput --clear >>"$BUILD_LOG" 2>&1 ) \
   || die "collectstatic failed before activation for ${LATEST} (see ${BUILD_LOG})"
 
+# --- feature gate ----------------------------------------------------------
+# A switched-on feature must not be pointed at a release that cannot run it, and
+# a run that is about to retire the live tree must not leave the worker executing
+# that retired tree. Both are decided before anything live is touched.
+if portal_flag_enabled && ! fingerprint_feature_in "$RELEASE_DIR"; then
+  die "FINGERPRINT_ENABLED is on but ${LATEST} has no fingerprint worker command; switch the flag off before deploying this release (nothing live was changed)"
+fi
+
+if worker_unit_installed; then
+  log "stopping ${WORKER_SERVICE} before the code switch"
+  systemctl stop "$WORKER_SERVICE" || die "cannot stop $WORKER_SERVICE — refusing to flip the code path under a running worker"
+  for _ in $(seq 1 15); do
+    systemctl is-active --quiet "$WORKER_SERVICE" || break
+    sleep 1
+  done
+  if systemctl is-active --quiet "$WORKER_SERVICE"; then
+    die "$WORKER_SERVICE is still active 15s after stop — refusing to flip"
+  fi
+  log "${WORKER_SERVICE} stopped; it is restarted only after the health check passes"
+  trap worker_stopped_interrupt INT TERM
+fi
+
 # --- flip ------------------------------------------------------------------
 ln -sfn "$RELEASE_DIR" "${APP_LINK}.new" && mv -Tf "${APP_LINK}.new" "$APP_LINK"
 log "symlink flipped: ${APP_LINK} -> ${RELEASE_DIR}"
@@ -580,8 +803,19 @@ systemctl restart "$SERVICE" || record_failure_and_die "systemctl restart failed
 log "service restarted"
 
 if health_check; then
+  # The worker is started only once the portal itself proved healthy, so a worker
+  # that refuses to come up rolls the code path back instead of leaving an
+  # activated-but-dead feature. It is part of the release: a failure here is a
+  # deploy failure, not a warning.
+  if portal_flag_enabled && worker_unit_installed && fingerprint_feature_in "$RELEASE_DIR"; then
+    systemctl start "$WORKER_SERVICE" || record_failure_and_die "systemctl start of ${WORKER_SERVICE} failed"
+    systemctl is-active --quiet "$WORKER_SERVICE" || record_failure_and_die "${WORKER_SERVICE} is not active after start"
+    log "${WORKER_SERVICE} is active on ${LATEST}"
+  elif [ -n "$WORKER_SERVICE" ]; then
+    log "WARNING: ${WORKER_SERVICE} stays stopped — ${LATEST} does not ship the fingerprint worker command"
+  fi
   echo "$LATEST" > "$LAST_TAG_FILE"
-  [ -n "$PREV_TARGET" ] && printf '%s\n' "$PREV_TARGET" > "$PREV_LINK_FILE"
+  if [ -n "$PREV_TARGET" ]; then printf '%s\n' "$PREV_TARGET" > "$PREV_LINK_FILE"; fi
   log "=== deploy OK: now running ${LATEST} ==="
 else
   record_failure_and_die "health check failed after ${HEALTH_RETRIES} attempts"

@@ -36,7 +36,9 @@
         </div>
         <div class="model-chip-grid">
             {% for model in group.models %}
-            <span class="model-chip" title="{{ model.id }}">
+            <span class="model-chip" title="{{ model.id }}" data-fp-model="{{ model.id }}"
+                  data-fp-supported="{% if model.fingerprint_supported == False %}0{% elif model.fingerprint_supported == True %}1{% endif %}"
+                  data-fp-reason="{{ model.fingerprint_reason|default:'' }}">
                 {% if group.logo %}
                 <img class="provider-logo provider-logo-sm" src="{% static group.logo %}" alt="" width="14" height="14" loading="lazy">
                 {% else %}

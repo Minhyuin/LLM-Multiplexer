@@ -1,0 +1,36 @@
+{% comment %}
+    模型指纹检测 —— 模型列表上方的入口区（v1.9.2）。
+
+    只在服务端确认功能开启时渲染（fingerprint_enabled）。包含：
+      · 感叹号图标（aria-label=检测说明）→ 展开/收起下方那句计费说明
+      · 计费与额度说明（固定的短句，由模板给出，脚本不改写）
+      · 今日剩余轮次（配额在列表上方，开始检测前就能看到）
+      · 发起检测时使用的本人 key（脱敏标签，多 key 时可切换）
+
+    这里不出现任何提交按钮：真正的「检测指纹」按钮在模型列表里点选条目后
+    就地展开，避免在整屏模型上铺满收费入口。
+{% endcomment %}
+{% if fingerprint_enabled %}
+<div class="fp-intro" id="fp-intro">
+    <div class="fp-intro-main">
+        <button type="button" class="fp-info-icon" id="fp-info-btn"
+                aria-label="检测说明" aria-controls="fp-hint" aria-expanded="false"
+                title="检测说明">!</button>
+        <div class="fp-intro-text">
+            <p class="fp-hint" id="fp-hint" hidden>每轮最多 3 个挑战请求，使用本人所选 key，用量计入本人账单；已发出的请求即使失败或取消也可能收费。</p>
+            <p class="fp-intro-lead">点选下方任一模型即可展开「检测指纹」。</p>
+        </div>
+        <span class="cred-count-pill fp-quota-pill" id="fp-quota-text">今日剩余 — 轮</span>
+    </div>
+    <div class="fp-intro-controls">
+        <label class="fp-control" for="fp-key-select">
+            <span class="fp-control-label">使用 key</span>
+            <select id="fp-key-select" class="fp-select" disabled>
+                <option value="">读取中…</option>
+            </select>
+        </label>
+        <p class="fp-control-note" id="fp-key-note" hidden></p>
+        <p class="fp-quota-next" id="fp-quota-next" hidden></p>
+    </div>
+</div>
+{% endif %}

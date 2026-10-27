@@ -18,6 +18,18 @@ The production gateway runs outside application releases at `/root/pioneer-porta
 - Rollback restores code/virtualenv/static assets via the old symlink. It does not reverse migrations or restore the database automatically. Additive community tables can remain during code rollback, preserving any newly written content.
 - Verify external login redirects, role access, branding, static files, service status and unchanged identities of nonportal services. Rearm the polling timer only after successful verification.
 
+## Fingerprint worker gates (v1.9.2, feature off by default)
+
+See `FINGERPRINT_RELEASE.md` for the install steps, environment keys and rollback semantics.
+
+- Confirm `scripts/lm-detector_lock.json` is the reviewed pin and that the pinned submodule gitlink is committed at that exact commit. The release tarball contains no submodule content; the gateway materialises the whitelist itself.
+- Record the `lmfpd` version, wheel name, wheel SHA-256 and the lock commit from `verify_sdk_runtime.py`/the wheel manifest **before** the deploy, and compare them against `/root/pioneer-portal/.fingerprint-release` afterwards.
+- If the release venv's offline runtime check was skipped (`SKIP_SDK_RUNTIME_CHECK=1`), treat the deploy as unverified and run `scripts/verify_sdk_runtime.py` in `/root/pioneer-portal/.venv` by hand before enabling the feature.
+- Install `pioneer-portal-fingerprint.service` once per host and leave it stopped; the gateway stops it before the symlink flip and starts it only after the health check passes. Starting it by hand before installing the release that ships `run_fingerprint_worker` runs code that does not exist.
+- Keep `FINGERPRINT_ENABLED=false` until the migration is applied, the unit is installed and `manage.py run_fingerprint_worker --once` exits cleanly on the live release. Turning the flag on with the unit missing, or with a release that has no worker command, makes the next deploy refuse.
+- Do not run fault-injection or queue-draining tests against the production database; `--once` on the live release is the only sanctioned smoke test and it must be run while the feature is still disabled.
+- Rollback keeps the worker on the previous release and leaves it stopped when that release has no worker command. An additive fingerprint schema survives the rollback; queued runs written by the newer release are not claimed until the feature is redeployed.
+
 ## Access and inherited operational boundaries
 
 Django login middleware does not protect nginx aliases. The inspected media directory was empty; do not introduce private uploads without authenticated delivery. Public static assets and the minimal health endpoint remain intentionally public. Existing nonportal subscription routes are outside the community feature's authorization boundary.

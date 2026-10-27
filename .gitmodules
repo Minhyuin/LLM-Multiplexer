@@ -1,0 +1,4 @@
+[submodule "third_party/lm-detector"]
+	path = third_party/lm-detector
+	url = https://github.com/Ikaleio/lm-detector.git
+	shallow = true

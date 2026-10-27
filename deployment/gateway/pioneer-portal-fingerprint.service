@@ -1,0 +1,76 @@
+[Unit]
+Description=Pioneer Portal fingerprint worker (portal-owned queue, bounded child processes)
+Documentation=file:/root/pioneer-portal.deploy/gateway/README.md
+Documentation=file:/root/pioneer-portal.deploy/gateway/FINGERPRINT_RELEASE.md
+After=network-online.target
+Wants=network-online.target
+# A crash loop must not turn into a fork bomb: five starts per five minutes, then
+# systemd stops trying and leaves a visible `failed` state for the operator.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+# The deploy gateway stops this unit before flipping the code symlink and starts
+# it again after the health check. Do not couple the two with BindsTo/PartOf:
+# a restart of the portal alone must not interrupt queued detections.
+[Service]
+Type=simple
+# Same identity as the portal service. Nothing here loosens /root: the code path
+# is made READ-ONLY below, this is not a permission grant.
+User=root
+EnvironmentFile=-/root/pioneer-portal/.env
+WorkingDirectory=/root/pioneer-portal
+# Resolves through the stable symlink, so `systemctl start` after a deploy runs
+# the new release's venv and code without editing this unit.
+ExecStart=/root/pioneer-portal/.venv/bin/python /root/pioneer-portal/manage.py run_fingerprint_worker
+# Never write .pyc into the read-only release tree, and never buffer output:
+# journald is the only log for this service.
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+# The worker handles SIGTERM itself: it stops its children and marks their runs
+# interrupted instead of silently losing them, so give it room to finish.
+TimeoutStopSec=90
+KillMode=control-group
+# --- provisional resource caps; confirm peak usage on the target Linux host --
+MemoryHigh=1G
+MemoryMax=1536M
+TasksMax=96
+CPUQuota=150%
+OOMPolicy=stop
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+# --- confinement --------------------------------------------------------------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+# The whole filesystem is read-only except /dev, /proc, /sys and the private
+# /tmp; the worker writes nothing but the database and the journal.
+ProtectSystem=strict
+ProtectHome=no
+ReadOnlyPaths=/root/pioneer-portal /root/pioneer-portal.releases
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+UMask=0077
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# TCP for the local CPA data endpoint and PostgreSQL, AF_UNIX for the resolver
+# and any local socket PostgreSQL may use.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Deliberately NOT set: MemoryDenyWriteExecute (some numeric/compression
+# extensions are sensitive to W^X) and ProtectProc. If they are wanted later,
+# prove the pinned numpy/zstandard wheels still import inside this unit first.
+
+[Install]
+WantedBy=multi-user.target

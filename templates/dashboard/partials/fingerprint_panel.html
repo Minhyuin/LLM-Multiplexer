@@ -1,0 +1,102 @@
+{% comment %}
+    模型指纹检测 —— 结果区（v1.9.2），位于模型列表下方。
+
+    只在服务端确认功能开启时渲染（fingerprint_enabled）。整段默认隐藏
+    （hidden），由脚本在没有结果、没有提示、也没有历史记录时保持隐藏，
+    这样一次检测都没跑过的页面就只有列表和上方那行入口说明。
+
+    这里只呈现服务端返回的字段，缺字段显示「不可用」，不猜、不补。
+{% endcomment %}
+{% if fingerprint_enabled %}
+<section class="cred-section-card mb-4" id="fingerprint-card" hidden>
+    <div class="cred-section-header">
+        <div class="cred-section-title-block">
+            <div class="d-flex align-items-center gap-2">
+                <span class="cred-section-eyebrow">🔎 fingerprints</span>
+                <h5 class="cred-section-title mb-0">检测结果</h5>
+            </div>
+        </div>
+    </div>
+
+    <div class="fp-notice fp-notice-info" id="fp-notice" hidden role="status" aria-live="polite">
+        <span id="fp-notice-text"></span>
+        <button type="button" class="fp-notice-retry" id="fp-notice-retry" hidden>重试</button>
+    </div>
+
+    <div class="fp-result" id="fp-result" hidden>
+        <div class="fp-result-head">
+            <div class="fp-result-identity">
+                <span class="fp-result-model" id="fp-run-model">—</span>
+                <span class="fp-result-time" id="fp-run-time">—</span>
+            </div>
+            <div class="fp-result-actions">
+                <span class="fp-status fp-status-muted" id="fp-run-status">—</span>
+                <button type="button" class="fp-btn fp-btn-ghost" id="fp-run-back" hidden>回到进行中的任务</button>
+                <button type="button" class="fp-btn fp-btn-ghost" id="fp-run-cancel" hidden>取消</button>
+                <button type="button" class="fp-btn" id="fp-run-again" hidden>再次检测</button>
+            </div>
+        </div>
+
+        <div class="fp-progress">
+            <div class="fp-progress-track"><div class="fp-progress-fill" id="fp-progress-fill"></div></div>
+            <p class="fp-progress-text" id="fp-progress-text">—</p>
+        </div>
+
+        <p class="fp-run-error" id="fp-run-error" hidden></p>
+
+        <div class="fp-verdict" id="fp-verdict" hidden>
+            <div class="fp-verdict-block">
+                <span class="fp-verdict-label">最可能家族</span>
+                <span class="fp-verdict-value" id="fp-run-family">—</span>
+            </div>
+            <div class="fp-verdict-block">
+                <span class="fp-verdict-label">结论</span>
+                <span class="fp-verdict-value" id="fp-run-verdict">—</span>
+            </div>
+        </div>
+
+        <div class="fp-candidates" id="fp-candidates" hidden>
+            <div class="fp-section-label">候选参考模型（最多5项）</div>
+            <div class="fp-table-wrap">
+                <table class="fp-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">参考模型</th>
+                            <th scope="col">相似度</th>
+                            <th scope="col">参考库内概率</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fp-candidates-body"></tbody>
+                </table>
+            </div>
+            <p class="fp-candidates-empty" id="fp-candidates-empty" hidden>本次结果没有给出候选参考模型。</p>
+            <p class="fp-caveat" id="fp-caveat">
+                相似度来自封闭参考库的模型特征比对，只表示接近已登记模型家族的程度；
+                它不是真伪判定，也不能作为伪造或冒充的证据。
+            </p>
+        </div>
+
+        <div class="fp-samples-wrap" id="fp-samples-wrap" hidden>
+            <div class="fp-section-label">样本明细</div>
+            <ol class="fp-samples" id="fp-samples"></ol>
+        </div>
+
+        <dl class="fp-meta">
+            <div class="fp-meta-row"><dt>协议</dt><dd id="fp-kv-protocol">不可用</dd></div>
+            <div class="fp-meta-row"><dt>key</dt><dd id="fp-kv-key">不可用</dd></div>
+            <div class="fp-meta-row"><dt>上游版本</dt><dd id="fp-kv-upstream">不可用</dd></div>
+            <div class="fp-meta-row"><dt>指纹库构建</dt><dd id="fp-kv-bank">不可用</dd></div>
+            <div class="fp-meta-row" id="fp-row-params" hidden><dt>参数</dt><dd id="fp-kv-params">不可用</dd></div>
+            <div class="fp-meta-row" id="fp-row-duration" hidden><dt>耗时</dt><dd id="fp-kv-duration">不可用</dd></div>
+            <div class="fp-meta-row"><dt>用量</dt><dd id="fp-usage">用量待同步/以上游账单为准</dd></div>
+        </dl>
+    </div>
+
+    <details class="fp-history-details" id="fp-history" hidden>
+        <summary class="fp-history-summary">
+            最近 24 小时检测记录<span class="fp-history-count" id="fp-history-count"></span>
+        </summary>
+        <ol class="fp-history-list" id="fp-history-list"></ol>
+    </details>
+</section>
+{% endif %}

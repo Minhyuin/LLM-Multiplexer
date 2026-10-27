@@ -178,6 +178,9 @@ class ViewAsMiddleware:
             return None
 
         view_name = request.resolver_match.view_name if request.resolver_match else ""
+        # Fingerprint JSON views apply the same read-only rule with JSON errors.
+        if getattr(view_func, "portal_json_auth", False):
+            return None
         if request.method not in SAFE_METHODS:
             if view_name not in ALLOWED_UNSAFE_VIEW_NAMES:
                 return self._read_only_response(request, view_name)

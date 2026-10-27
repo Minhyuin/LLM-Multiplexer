@@ -1,8 +1,13 @@
 from django.urls import path
 
 from dashboard import views
+from fingerprints import views as fingerprint_views
 
 urlpatterns = [
+    path("fingerprints/state/", fingerprint_views.state, name="fingerprint-state"),
+    path("fingerprints/start/", fingerprint_views.start, name="fingerprint-start"),
+    path("fingerprints/<uuid:run_id>/", fingerprint_views.detail, name="fingerprint-detail"),
+    path("fingerprints/<uuid:run_id>/cancel/", fingerprint_views.cancel, name="fingerprint-cancel"),
     path("public/modules/<str:module>/", views.public_dashboard_module, name="public-dashboard-module"),
     path("admin/modules/<str:module>/", views.admin_dashboard_module, name="admin-dashboard-module"),
     path("public/model-usage/", views.public_model_usage, name="public-model-usage"),

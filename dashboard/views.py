@@ -631,7 +631,8 @@ def admin_credentials(request):
         creds.sort(key=lambda c: (c["disabled"], -(c.get("five_h_total", 0) + c.get("weekly_total", 0))))
         sorted_groups.append((p, creds))
 
-    catalog = collect_available_models(request.user, fetch=False)
+    from fingerprints.views import annotate_catalog
+    catalog = annotate_catalog(collect_available_models(request.user, fetch=False), request)
 
     return render(request, "dashboard/credentials.html", {
         "credential_groups": sorted_groups,
@@ -646,7 +647,8 @@ def admin_credentials_models_refresh(request):
     if request.method != "POST":
         return JsonResponse({"ok": False, "error": "POST required"}, status=405)
 
-    catalog = collect_available_models(request.user, fetch=True)
+    from fingerprints.views import annotate_catalog
+    catalog = annotate_catalog(collect_available_models(request.user, fetch=True), request)
     html = render_to_string("dashboard/partials/model_catalog.html", catalog, request=request)
     return JsonResponse({
         "ok": not catalog["models_error"],

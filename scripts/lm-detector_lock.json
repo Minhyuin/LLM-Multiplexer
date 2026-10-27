@@ -1,0 +1,136 @@
+{
+  "schema": "lm-detector-lock/1",
+  "portal_version": "1.9.2",
+  "submodule_path": "third_party/lm-detector",
+  "data_dir": "third_party/lm-detector/data",
+  "upstream": {
+    "repository": "https://github.com/Ikaleio/lm-detector.git",
+    "commit": "a4ef212df06817e8071acd05f00219f4c9eb2f9a",
+    "tag": null,
+    "license": "MIT"
+  },
+  "sdk": {
+    "distribution": "lmfpd",
+    "version": "0.2.0",
+    "source_subdir": "sdk/python",
+    "requires_python": ">=3.10"
+  },
+  "files": [
+    {
+      "path": "LICENSE",
+      "role": "license",
+      "size": 1085,
+      "sha256": "4812aaf2fc8971c97c8e054f7cecb16486f903d5c5b181ea48304c12182a11e7"
+    },
+    {
+      "path": "sdk/python/pyproject.toml",
+      "role": "sdk",
+      "size": 559,
+      "sha256": "a0f9c5601ca019c38ea04946ae1b7f1d102ea6f663a6b6e7d9b85f9401e27ecf"
+    },
+    {
+      "path": "sdk/python/README.md",
+      "role": "sdk",
+      "size": 4774,
+      "sha256": "a7225f1911ee3fbb9005469412288de21b071f3dba600ed2b176e4c57eab200b"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/__init__.py",
+      "role": "sdk",
+      "size": 6475,
+      "sha256": "af5c78ad5db1176e21a1dc187d65b6cdf5f70f9c42dffa6d7b60467299e51d34"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_analysis.py",
+      "role": "sdk",
+      "size": 9244,
+      "sha256": "e43cadeb39a240a5313dd73a9d532a60d015434d2f2c6b0a7f0b7c4ba8238864"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_challenge.py",
+      "role": "sdk",
+      "size": 1689,
+      "sha256": "0850754f8c70faab3ca05352851349f2dfd75cf99f612e2ad688ebf2899971a2"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_codec.py",
+      "role": "sdk",
+      "size": 1243,
+      "sha256": "501398c4beccb6a2bb60c2b500632fcb79c3643e85b000686aa6a01ef0eff84b"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_data.py",
+      "role": "sdk",
+      "size": 8205,
+      "sha256": "4b6b81fa8583ea968d88e5fadf3285daf9df1ab9e88fba2325619d444440399c"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_features.py",
+      "role": "sdk",
+      "size": 5576,
+      "sha256": "2ec1c805418eafa3e371f6877d6090c2a465997ba512772388829ad961ab3b40"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_ranker.py",
+      "role": "sdk",
+      "size": 7907,
+      "sha256": "3ab970f2dd80481b359d0bc32259c42b2e2fa587e5da322ed7f11fda49eb40a6"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_sampling.py",
+      "role": "sdk",
+      "size": 23255,
+      "sha256": "2473da3a2c4a6dcf69efdc2d361c5747175ef5a3ecae6d9830045fcd1c1a7c30"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/_types.py",
+      "role": "sdk",
+      "size": 2951,
+      "sha256": "061ad07748adbbf64d9a2904ffa4fa6c3d3a97bb8183e61a73e96c854861f200"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/py.typed",
+      "role": "sdk",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sdk/python/src/lmfpd/templates.json",
+      "role": "sdk",
+      "size": 12187,
+      "sha256": "db686b9435e9a1d819443c51becee0fb87c524b521e495cb2752f43f482faf71"
+    },
+    {
+      "path": "data/unified_bank.json",
+      "role": "reference-data",
+      "size": 13852009,
+      "sha256": "5e0e3bffa6b708b16fc512fd521d41de2de03afc6c734dbc3ac1eceb7cb49db3"
+    },
+    {
+      "path": "data/shared_detector.bin",
+      "role": "reference-data",
+      "size": 4667588,
+      "sha256": "9ac93e5e580f5bac887f97a20bfae15d0a3ad08c6372e4b3552fce6708078a80"
+    }
+  ],
+  "sparse_patterns": [
+    "/LICENSE",
+    "/sdk/python/pyproject.toml",
+    "/sdk/python/README.md",
+    "/sdk/python/src/lmfpd/__init__.py",
+    "/sdk/python/src/lmfpd/_analysis.py",
+    "/sdk/python/src/lmfpd/_challenge.py",
+    "/sdk/python/src/lmfpd/_codec.py",
+    "/sdk/python/src/lmfpd/_data.py",
+    "/sdk/python/src/lmfpd/_features.py",
+    "/sdk/python/src/lmfpd/_ranker.py",
+    "/sdk/python/src/lmfpd/_sampling.py",
+    "/sdk/python/src/lmfpd/_types.py",
+    "/sdk/python/src/lmfpd/py.typed",
+    "/sdk/python/src/lmfpd/templates.json",
+    "/data/unified_bank.json",
+    "/data/shared_detector.bin"
+  ],
+  "generated_by": "scripts/prepare_fingerprint.py init",
+  "generated_at": "2026-10-27T09:22:50Z"
+}

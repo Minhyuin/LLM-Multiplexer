@@ -1,0 +1,6 @@
+# v1.9.2 模型指纹检测：lmfpd 本身不在 PyPI 上（PyPI 上的 lmfpd 是另一个项目）。
+# 它由固定提交的上游源码构建（scripts/build_sdk_wheel.py），随 release 资产分发，
+# 安装时要求走本地 wheelhouse、禁止回落到公网：
+#   pip install --no-index --find-links <wheelhouse> -r requirements-fingerprint.txt
+# 版本与 scripts/lm-detector_lock.json 的 sdk.version 必须一致。
+lmfpd==0.2.0
