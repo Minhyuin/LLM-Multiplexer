@@ -286,12 +286,11 @@ def short_id_for_request_id(request_id: str) -> str:
     return compact[-8:].lower() if len(compact) >= 8 else ""
 
 
-def iter_request_logs(since=None):
-    """Yield ``(path, stat, request_time, short_id)`` oldest first."""
+def scan_request_logs(since=None):
+    """Return every importable log as ``(request_time, path, size, short_id, prefix)``, oldest first."""
     directory = query_trace_log_dir()
     if not directory.is_dir():
         return []
-    limit = _setting_int("QUERY_TRACE_SCAN_LIMIT", 500)
     found = []
     for entry in os.scandir(directory):
         try:
@@ -313,7 +312,7 @@ def iter_request_logs(since=None):
             continue
         found.append((request_time, entry.path, stat.st_size, short_id, prefix))
     found.sort(key=lambda item: item[0])
-    return found[:limit]
+    return found
 
 
 def _attribution_from_keeper_events(keeper_events):
@@ -451,16 +450,27 @@ def sync_query_traces(keeper_events=None, limit=None, dry_run=False, prune=True)
     else:
         since = django_timezone.now() - timedelta(hours=_setting_int("QUERY_TRACE_BACKFILL_HOURS", 24))
 
-    candidates = iter_request_logs(since=since)
-    if limit:
-        candidates = candidates[-int(limit):]
+    all_candidates = scan_request_logs(since=since)
+    scan_limit = max(1, _setting_int("QUERY_TRACE_SCAN_LIMIT", 500))
 
     known = set()
-    short_ids = [item[3] for item in candidates]
+    short_ids = [item[3] for item in all_candidates]
     for index in range(0, len(short_ids), 500):
         known.update(
             QueryTrace.objects.filter(short_id__in=short_ids[index:index + 500]).values_list("short_id", flat=True)
         )
+
+    # FIFO, not LIFO: work through the oldest files that are not stored yet. Taking the
+    # newest ones instead would starve the backlog forever once a busy proxy writes more
+    # files than one sync may read, which silently cuts a hole in the audit trail.
+    pending = [item for item in all_candidates if item[3] not in known]
+    skipped = len(all_candidates) - len(pending)
+    candidates = pending[:scan_limit]
+    backlog = len(pending) - len(candidates)
+    if backlog:
+        logger.warning("query trace backlog: %d request logs are queued for the next syncs", backlog)
+    if limit:
+        candidates = candidates[:int(limit)]
 
     # the keeper events imported by this run are the freshest source, but a usage row
     # that arrived earlier still has to be usable: merge instead of picking one
@@ -553,6 +563,8 @@ def sync_query_traces(keeper_events=None, limit=None, dry_run=False, prune=True)
     summary_lines = []
     if unattributed:
         summary_lines.append(f"unattributed={unattributed}")
+    if backlog:
+        summary_lines.append(f"backlog={backlog}")
     if reattributed:
         summary_lines.append(f"reattributed={reattributed}")
     if deleted_expired or deleted_overflow:

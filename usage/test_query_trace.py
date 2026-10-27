@@ -247,6 +247,38 @@ class SyncQueryTraceTests(TestCase):
         self.assertEqual(trace.api_key, self.api_key)
         self.assertEqual(trace.api_key_identifier, "sk-trace-***-mask")
 
+    def test_backlog_beyond_the_scan_limit_is_imported_by_later_syncs(self):
+        """A burst larger than the scan window must not starve the oldest files.
+
+        Regression: the scan used to keep the *oldest* ``SCAN_LIMIT`` files in the
+        window. Once a busy proxy wrote more than that, every run re-read the same
+        already stored files and the newest queries were never imported at all.
+        """
+        base = timezone.now() - timedelta(minutes=30)
+        with override_settings(QUERY_TRACE_SCAN_LIMIT=2):
+            for index in range(3):
+                write_log(
+                    self.directory.name,
+                    short_id="be%06x" % index,
+                    when=base + timedelta(minutes=index),
+                    body=chat_body("积压用例 %d" % index),
+                )
+            first = sync_query_traces()
+
+        self.assertEqual(first.imported_count, 2)
+        self.assertIn("backlog=1", first.summary)
+        self.assertEqual(
+            set(QueryTrace.objects.values_list("short_id", flat=True)), {"be000000", "be000001"}
+        )
+
+        with override_settings(QUERY_TRACE_SCAN_LIMIT=2):
+            second = sync_query_traces()
+
+        self.assertEqual(second.imported_count, 1)
+        self.assertEqual(QueryTrace.objects.count(), 3)
+        self.assertIn("be000002", set(QueryTrace.objects.values_list("short_id", flat=True)))
+        self.assertNotIn("backlog=", second.summary)
+
     def test_second_run_skips_existing(self):
         upstream_id = "01a138c3-fd16-7ea1-a079-e013ba5ebf9f"
         short_id = short_id_for_request_id(upstream_id)
