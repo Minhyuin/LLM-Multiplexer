@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+
+{% block title %}站点设置{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <span class="eyebrow-badge mb-2 d-inline-flex">Admin</span>
+    <h3 class="mb-1">站点设置</h3>
+    <p class="text-muted mb-0">配置公开展示给成员的 API 地址。留空时会自动使用当前访问域名，因此新部署无需手工配置。</p>
+</section>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card panel-card h-100"><div class="card-body p-4">
+            <h5 class="section-title">公开 API 地址</h5>
+            <form method="post">
+                {% csrf_token %}
+                {% for error in form.non_field_errors %}
+                    <div class="alert alert-danger" role="alert">{{ error }}</div>
+                {% endfor %}
+                <div class="mb-3">
+                    <label for="{{ form.public_api_base_url.id_for_label }}" class="form-label fw-semibold">{{ form.public_api_base_url.label }}</label>
+                    {{ form.public_api_base_url }}
+                    {% if form.public_api_base_url.help_text %}<div class="form-text">{{ form.public_api_base_url.help_text }}</div>{% endif %}
+                    {% for error in form.public_api_base_url.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                </div>
+                <p class="small text-muted">只填写站点根地址，例如 <code>https://api.example.com</code>；可带 <code>/v1</code>，保存时会自动规范化。留空表示自动检测。</p>
+                <button class="btn btn-primary rounded-pill px-4" type="submit"><i class="bi bi-check-circle me-1"></i>保存设置</button>
+            </form>
+        </div></div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card panel-card h-100"><div class="card-body p-4">
+            <h5 class="section-title">当前生效地址</h5>
+            <dl class="row mb-0">
+                <dt class="col-sm-4">Base URL</dt>
+                <dd class="col-sm-8"><code>{{ effective_public_api_base_url|default:"—" }}</code></dd>
+                <dt class="col-sm-4">来源</dt>
+                <dd class="col-sm-8">{% if configured_public_api_base_url %}管理员设置{% else %}当前访问域名（自动）{% endif %}</dd>
+                {% if configured_public_api_base_url %}
+                <dt class="col-sm-4">已保存根地址</dt>
+                <dd class="col-sm-8"><code>{{ configured_public_api_base_url }}</code></dd>
+                {% endif %}
+                <dt class="col-sm-4">最后更新</dt>
+                <dd class="col-sm-8">
+                    {% if settings_obj.updated_at %}
+                        {{ settings_obj.updated_at|date:'Y-m-d H:i' }}
+                        {% if settings_obj.updated_by %} · {{ settings_obj.updated_by.profile.display_name|default:settings_obj.updated_by.username }}{% endif %}
+                    {% else %}—{% endif %}
+                </dd>
+            </dl>
+            <p class="small text-muted mt-3 mb-0">成员在“我的额度”中看到并复制此地址。若通过反向代理访问，请确保代理传递了正确的 <code>Host</code> 请求头，否则自动检测会得到内部地址。</p>
+        </div></div>
+    </div>
+</div>
+{% endblock %}

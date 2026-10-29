@@ -1,6 +1,5 @@
 from datetime import date, timedelta
 
-from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q, Sum
 from django.shortcuts import render
@@ -8,6 +7,7 @@ from django.utils import timezone
 
 from api_keys.models import APIKey
 from api_keys.rotation import self_rotate_state
+from core.site_settings import public_api_v1_url
 from quota.activity import personal_activity
 from quota.models import UserQuotaSnapshot
 from usage.models import UsageLog
@@ -69,7 +69,7 @@ def my_quota(request):
         "registration_sync_pending": RegistrationProvision.objects.filter(
             user=request.user, synced_at__isnull=True, api_key__status=APIKey.STATUS_PENDING,
         ).exists(),
-        "cliproxy_base_url": f"{settings.CLIPROXY_BASE_URL.rstrip('/')}/v1",
+        "cliproxy_base_url": public_api_v1_url(request),
         "range_name": range_name,
         "range_label": range_label,
         "usage_stats": usage_stats,

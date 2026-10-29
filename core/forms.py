@@ -2,7 +2,7 @@ from django import forms
 from django.conf import settings
 
 from core.attachments import check_batch_limits, human_size, validate_attachment
-from core.models import Announcement, DiscussionPost, DiscussionTopic
+from core.models import Announcement, DiscussionPost, DiscussionTopic, SiteSettings
 
 ATTACHMENT_HELP = (
     "可一次选择多个文件（按住 Ctrl/⌘ 多选）。"
@@ -111,3 +111,15 @@ class DiscussionPostForm(AttachmentUploadMixin, PortalForm):
     class Meta:
         model = DiscussionPost
         fields = ["body"]
+
+
+class SiteSettingsForm(PortalForm):
+    class Meta:
+        model = SiteSettings
+        fields = ["public_api_base_url"]
+        labels = {"public_api_base_url": "公开 API 根地址"}
+        widgets = {
+            "public_api_base_url": forms.URLInput(
+                attrs={"placeholder": "https://api.example.com", "autocomplete": "url"}
+            )
+        }

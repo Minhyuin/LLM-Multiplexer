@@ -1,4 +1,8 @@
+from urllib.parse import urlsplit
+
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.core.validators import URLValidator
 from django.db import models
 
 from core.attachments import PrivateAttachmentStorage
@@ -107,3 +111,74 @@ class Attachment(models.Model):
     def can_serve_inline(self) -> bool:
         """Only raster images may be shown inline; everything else is downloaded."""
         return self.is_image and self.mime_type.startswith("image/")
+
+
+class SiteSettings(models.Model):
+    """Admin-editable site settings that must change without a redeploy.
+
+    There is exactly one row (pk=1).  ``public_api_base_url`` is optional: when
+    it is blank the portal derives the public address from the incoming request,
+    so a fresh deployment is correct without any manual configuration.
+    """
+
+    public_api_base_url = models.CharField(
+        "公开 API 根地址",
+        max_length=200,
+        blank=True,
+        help_text="例如 https://api.example.com；留空时自动使用成员访问门户的域名。",
+    )
+    updated_at = models.DateTimeField("更新时间", auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="最后修改人",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
+    class Meta:
+        verbose_name = "站点设置"
+        verbose_name_plural = "站点设置"
+
+    def __str__(self):
+        return "站点设置"
+
+    def save(self, *args, **kwargs):
+        # Enforce the singleton even if a caller passes another pk.
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def clean(self):
+        super().clean()
+        value = (self.public_api_base_url or "").strip()
+        if not value:
+            self.public_api_base_url = ""
+            return
+
+        try:
+            URLValidator(schemes=["http", "https"])(value)
+        except ValidationError as exc:
+            raise ValidationError(
+                {"public_api_base_url": "请输入以 http:// 或 https:// 开头的完整地址。"}
+            ) from exc
+
+        parsed = urlsplit(value)
+        if not parsed.hostname:
+            raise ValidationError({"public_api_base_url": "地址必须包含域名或 IP。"})
+        if parsed.username or parsed.password:
+            raise ValidationError({"public_api_base_url": "地址中不能包含用户名或密码。"})
+        if parsed.query or parsed.fragment:
+            raise ValidationError({"public_api_base_url": "地址中不能包含查询参数或锚点。"})
+        if parsed.path.rstrip("/") not in {"", "/v1"}:
+            raise ValidationError(
+                {"public_api_base_url": "只填写站点根地址（可带 /v1），不要包含其他路径。"}
+            )
+
+        # Store a canonical origin; the portal appends /v1 where needed.
+        self.public_api_base_url = f"{parsed.scheme}://{parsed.netloc}"
