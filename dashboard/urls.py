@@ -14,6 +14,7 @@ urlpatterns = [
     path("admin/model-usage/", views.admin_model_usage, name="admin-model-usage"),
     path("public/", views.public_dashboard, name="public-dashboard"),
     path("admin/", views.admin_dashboard, name="admin-dashboard"),
+    path("admin/settings/", views.site_settings, name="admin-site-settings"),
     path("admin/pricing/", views.model_pricing_admin, name="admin-model-pricing"),
     path("admin/queries/", views.query_trace_list, name="admin-query-traces"),
     path("admin/queries/<str:short_id>/", views.query_trace_detail, name="admin-query-trace-detail"),

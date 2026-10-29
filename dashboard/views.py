@@ -3,15 +3,19 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Q, Sum
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.utils import timezone
 
+from core.forms import SiteSettingsForm
 from core.key_identifiers import key_index, key_suffix
+from core.models import SiteSettings
+from core.site_settings import configured_public_api_base_url, public_api_v1_url
 from core.utils import admin_required
 from dashboard.forms import ModelPricingForm
 from dashboard.model_catalog import collect_available_models
@@ -319,6 +323,29 @@ def model_pricing_admin(request):
         form = ModelPricingForm()
     pricings = ModelPricing.objects.all()
     return render(request, "dashboard/model_pricing_admin.html", {"form": form, "pricings": pricings})
+
+
+@admin_required
+def site_settings(request):
+    instance = SiteSettings.objects.filter(pk=1).first() or SiteSettings()
+    form = SiteSettingsForm(request.POST or None, instance=instance)
+    if request.method == "POST" and form.is_valid():
+        obj = form.save(commit=False)
+        obj.updated_by = request.user
+        obj.save()
+        messages.success(request, "站点设置已保存。")
+        return redirect("admin-site-settings")
+    configured_origin = configured_public_api_base_url()
+    return render(
+        request,
+        "dashboard/site_settings.html",
+        {
+            "form": form,
+            "settings_obj": instance,
+            "configured_public_api_base_url": configured_origin,
+            "effective_public_api_base_url": public_api_v1_url(request),
+        },
+    )
 
 
 def _fetch_auth_files():
