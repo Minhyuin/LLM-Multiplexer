@@ -94,7 +94,11 @@ die() { log "ERROR: $*"; exit 1; }
 #     the feature is disabled: a release without the worker command is still
 #     deployable, it just reports that the worker remains stopped.
 # ---------------------------------------------------------------------------
-WORKER_SERVICE="${WORKER_SERVICE:-}"
+WORKER_SERVICE="${WORKER_SERVICE:-pioneer-portal-fingerprint}"
+WORKER_USER="${WORKER_USER:-pioneer}"
+WORKER_GROUP="${WORKER_GROUP:-pioneer}"
+SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
+WORKER_UNIT_SOURCE="${WORKER_UNIT_SOURCE:-deployment/gateway/pioneer-portal-fingerprint.service}"
 SKIP_FINGERPRINT_DEPS="${SKIP_FINGERPRINT_DEPS:-0}"
 SKIP_SDK_RUNTIME_CHECK="${SKIP_SDK_RUNTIME_CHECK:-0}"
 FP_LOCK="scripts/lm-detector_lock.json"
@@ -114,6 +118,33 @@ portal_flag_enabled() {              # FINGERPRINT_ENABLED as the PORTAL reads i
 worker_unit_installed() {
   [ -n "$WORKER_SERVICE" ] || return 1
   systemctl cat "$WORKER_SERVICE" >/dev/null 2>&1
+}
+
+# The unit is part of the release, not an operator prerequisite.  A missing or
+# outdated unit is installed/updated before the code switch, and the worker is
+# always enabled and running; the FINGERPRINT_ENABLED switch only controls
+# whether it claims work (the command idles while disabled).
+install_worker_unit() {
+  [ -n "$WORKER_SERVICE" ] || { log "fingerprint worker disabled (WORKER_SERVICE empty)"; return 0; }
+  local src="$RELEASE_DIR/$WORKER_UNIT_SOURCE"
+  [ -f "$src" ] || src="${GATEWAY_DIR}/pioneer-portal-fingerprint.service"
+  [ -f "$src" ] || die "worker unit template not found in ${LATEST} or ${GATEWAY_DIR}"
+
+  local dest="${SYSTEMD_DIR}/${WORKER_SERVICE}.service"
+  local tmp="${STATE_DIR}/.${WORKER_SERVICE}.service.tmp"
+  mkdir -p "$SYSTEMD_DIR"
+  sed -e "s|@WORKER_USER@|${WORKER_USER}|g" \
+      -e "s|@WORKER_GROUP@|${WORKER_GROUP}|g" "$src" > "$tmp"
+  if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+    log "fingerprint worker unit unchanged: ${dest}"
+  else
+    install -m 0644 "$tmp" "$dest"
+    rm -f "$tmp"
+    systemctl daemon-reload
+    log "fingerprint worker unit installed: ${dest}"
+  fi
+  systemctl enable "$WORKER_SERVICE" >/dev/null 2>&1 || die "cannot enable ${WORKER_SERVICE}"
 }
 
 fingerprint_feature_in() {           # $1 = a release directory
@@ -229,12 +260,6 @@ preflight() {
   [ -f "$ENV_FILE" ]          || { log "preflight: MISSING $ENV_FILE"; rc=1; }
   systemctl cat "$SERVICE" >/dev/null 2>&1 || { log "preflight: MISSING systemd unit $SERVICE"; rc=1; }
   [ -L "$APP_LINK" ] || log "preflight: NOTE $APP_LINK is not a symlink yet (first deploy will convert it)"
-  # Fail fast instead of after a full build: a switched-on feature with no worker
-  # unit would activate code that can never execute a detection.
-  if portal_flag_enabled && ! worker_unit_installed; then
-    log "preflight: FINGERPRINT_ENABLED is on in $ENV_FILE but worker unit '${WORKER_SERVICE:-<WORKER_SERVICE unset>}' is not installed"
-    rc=1
-  fi
   return $rc
 }
 
@@ -422,8 +447,8 @@ restore_worker_after_rollback() {
     log "rollback: worker unit $WORKER_SERVICE is not installed — nothing to restart"
     return 0
   fi
-  if ! portal_flag_enabled || ! fingerprint_feature_in "$prev"; then
-    log "rollback: fingerprint is disabled or ${prev##*/} has no worker command — leaving $WORKER_SERVICE stopped"
+  if ! fingerprint_feature_in "$prev"; then
+    log "rollback: ${prev##*/} has no worker command — leaving $WORKER_SERVICE stopped"
     systemctl stop "$WORKER_SERVICE" >/dev/null 2>&1 || true
     return 0
   fi
@@ -746,9 +771,11 @@ fi
   || die "collectstatic failed before activation for ${LATEST} (see ${BUILD_LOG})"
 
 # --- feature gate ----------------------------------------------------------
-# A switched-on feature must not be pointed at a release that cannot run it, and
-# a run that is about to retire the live tree must not leave the worker executing
-# that retired tree. Both are decided before anything live is touched.
+# Runtime prerequisites are release-owned: install/refresh the unit on every
+# deploy, before the code switch. The feature flag only controls whether the
+# worker claims work; it must not decide whether the runtime exists.
+install_worker_unit
+
 if portal_flag_enabled && ! fingerprint_feature_in "$RELEASE_DIR"; then
   die "FINGERPRINT_ENABLED is on but ${LATEST} has no fingerprint worker command; switch the flag off before deploying this release (nothing live was changed)"
 fi
@@ -803,14 +830,16 @@ systemctl restart "$SERVICE" || record_failure_and_die "systemctl restart failed
 log "service restarted"
 
 if health_check; then
-  # The worker is started only once the portal itself proved healthy, so a worker
-  # that refuses to come up rolls the code path back instead of leaving an
-  # activated-but-dead feature. It is part of the release: a failure here is a
-  # deploy failure, not a warning.
-  if portal_flag_enabled && worker_unit_installed && fingerprint_feature_in "$RELEASE_DIR"; then
+  # The worker is part of every release now: start it even while the feature is
+  # disabled (it idles), so flipping FINGERPRINT_ENABLED later needs no deploy.
+  if worker_unit_installed && fingerprint_feature_in "$RELEASE_DIR"; then
     systemctl start "$WORKER_SERVICE" || record_failure_and_die "systemctl start of ${WORKER_SERVICE} failed"
     systemctl is-active --quiet "$WORKER_SERVICE" || record_failure_and_die "${WORKER_SERVICE} is not active after start"
-    log "${WORKER_SERVICE} is active on ${LATEST}"
+    if portal_flag_enabled; then
+      log "${WORKER_SERVICE} is active on ${LATEST} (fingerprint enabled)"
+    else
+      log "${WORKER_SERVICE} is active on ${LATEST} (idle; fingerprint disabled)"
+    fi
   elif [ -n "$WORKER_SERVICE" ]; then
     log "WARNING: ${WORKER_SERVICE} stays stopped — ${LATEST} does not ship the fingerprint worker command"
   fi

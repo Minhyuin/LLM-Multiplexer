@@ -1,6 +1,6 @@
 # Portal release safety checklist
 
-The production gateway runs outside application releases at `/root/pioneer-portal.deploy/gateway`. Updating the repository does not automatically update that external copy. Review and install gateway changes separately with the tag-polling timer stopped and the deployment lock held.
+The production gateway runs outside application releases at `/srv/pioneer-portal.deploy/gateway`. Updating the repository does not automatically update that external copy. Review and install gateway changes separately with the tag-polling timer stopped and the deployment lock held.
 
 ## Required release gates
 
@@ -20,15 +20,14 @@ The production gateway runs outside application releases at `/root/pioneer-porta
 
 ## Fingerprint worker gates (v1.9.2, feature off by default)
 
-See `FINGERPRINT_RELEASE.md` for the install steps, environment keys and rollback semantics.
+See `FINGERPRINT_RELEASE.md` for the gateway-owned runtime steps, environment keys and rollback semantics.
 
-- Confirm `scripts/lm-detector_lock.json` is the reviewed pin and that the pinned submodule gitlink is committed at that exact commit. The release tarball contains no submodule content; the gateway materialises the whitelist itself.
-- Record the `lmfpd` version, wheel name, wheel SHA-256 and the lock commit from `verify_sdk_runtime.py`/the wheel manifest **before** the deploy, and compare them against `/root/pioneer-portal/.fingerprint-release` afterwards.
-- If the release venv's offline runtime check was skipped (`SKIP_SDK_RUNTIME_CHECK=1`), treat the deploy as unverified and run `scripts/verify_sdk_runtime.py` in `/root/pioneer-portal/.venv` by hand before enabling the feature.
-- Install `pioneer-portal-fingerprint.service` once per host and leave it stopped; the gateway stops it before the symlink flip and starts it only after the health check passes. Starting it by hand before installing the release that ships `run_fingerprint_worker` runs code that does not exist.
-- Keep `FINGERPRINT_ENABLED=false` until the migration is applied, the unit is installed and `manage.py run_fingerprint_worker --once` exits cleanly on the live release. Turning the flag on with the unit missing, or with a release that has no worker command, makes the next deploy refuse.
-- Do not run fault-injection or queue-draining tests against the production database; `--once` on the live release is the only sanctioned smoke test and it must be run while the feature is still disabled.
-- Rollback keeps the worker on the previous release and leaves it stopped when that release has no worker command. An additive fingerprint schema survives the rollback; queued runs written by the newer release are not claimed until the feature is redeployed.
+- Confirm `scripts/lm-detector_lock.json` is the reviewed pin and that the pinned submodule gitlink is committed at that exact commit. The release tarball contains no submodule content; the gateway materialises the whitelist itself on every deploy, whether the feature flag is on or off.
+- Record the `lmfpd` version, wheel name, wheel SHA-256 and the lock commit from `verify_sdk_runtime.py`/the wheel manifest **before** the deploy, and compare them against `/srv/pioneer-portal/.fingerprint-release` afterwards.
+- The gateway installs/refreshes `pioneer-portal-fingerprint.service` from the release (`deployment/gateway/pioneer-portal-fingerprint.service`), enables it, and starts it after the health check even while the feature is off. Do not install the unit by hand; review gateway changes separately because `/srv/pioneer-portal.deploy/gateway` is outside the application release.
+- `FINGERPRINT_ENABLED` is an admin/runtime switch, not a runtime prerequisite. Confirm `systemctl is-active pioneer-portal-fingerprint` is `active` after every deploy; only then may an admin turn the feature on.
+- Do not run fault-injection or queue-draining tests against the production database; `--once` on the live release is the only sanctioned smoke test, and it must use an approved test account or run while the feature is disabled.
+- Rollback keeps the worker on the previous release and leaves it stopped only when that release has no worker command. An additive fingerprint schema survives the rollback; queued runs written by the newer release are not claimed until the feature is redeployed.
 
 ## Registration / invitation-code gates
 

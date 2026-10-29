@@ -1,15 +1,15 @@
 # Fingerprint worker release notes (v1.9.2)
 
 This document covers only the portal-owned fingerprint worker: what ships, how the
-deploy gateway treats it, how to install its systemd unit, and how to roll it back.
-Use it together with `README_DEPLOY.md` and `RELEASE_CHECKLIST.md`.
+deploy gateway treats it, how its runtime is installed with the release, and how to
+roll it back. Use it together with `README_DEPLOY.md` and `RELEASE_CHECKLIST.md`.
 
 The feature is **off by default**. While `FINGERPRINT_ENABLED` is false the UI
-and new admissions are disabled, and the gateway does not start the worker. A
-previously installed worker is stopped before a code switch. Releases carrying
-the dependency lock still prepare and verify the SDK, so enabling the feature
-later does not need a different code build. A disabled release without a worker
-command can also deploy.
+and new admissions are disabled, but the gateway still installs the worker unit and
+keeps the worker running in its idle mode. Flipping the admin switch therefore
+never requires a deploy or a manual systemd step. Releases carrying the dependency
+lock still prepare and verify the SDK on every deploy, so enabling the feature
+later does not need a different code build.
 
 ## What ships
 
@@ -21,7 +21,7 @@ command can also deploy.
 | `scripts/build_sdk_wheel.py` | release tree | builds `lmfpd` from the verified tree and writes `lm-detector-wheel.json` |
 | `scripts/verify_sdk_runtime.py` | release tree | offline proof that the pinned bank loads and scores in a given interpreter |
 | `third_party/lm-detector/` | git submodule | the pinned upstream source; **not** in the codeload tarball |
-| `pioneer-portal-fingerprint.service` | this directory | the worker unit (installed by hand, see below) |
+| `pioneer-portal-fingerprint.service` | this directory | the worker unit template; the gateway renders and installs it on every deploy |
 
 `lmfpd` is never installed from an index. The release venv gets it from the
 wheelhouse built out of the verified tree, with `--no-index`.
@@ -43,30 +43,32 @@ Gateway `deploy.env` (only affects the deploy run):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `WORKER_SERVICE` | `pioneer-portal-fingerprint` | unit the gateway stops/restarts; empty disables every worker hook |
+| `WORKER_SERVICE` | `pioneer-portal-fingerprint` | unit the gateway installs/stops/restarts; empty disables every worker hook |
+| `WORKER_USER` / `WORKER_GROUP` | `pioneer` | service identity rendered into the unit template |
+| `SYSTEMD_DIR` | `/etc/systemd/system` | where the rendered unit is installed |
 | `SKIP_FINGERPRINT_DEPS` | `0` | `1` skips materialising the pinned dependency (debugging only) |
 | `SKIP_SDK_RUNTIME_CHECK` | `0` | `1` skips the offline SDK proof in the release venv (debugging only) |
 
-## Install the unit (once per host)
+## Release-owned worker unit
 
-The gateway copy at `/root/pioneer-portal.deploy/gateway` is deployed separately
-from the application; installing the unit is an operator action, not something a
-release does.
+The worker unit is part of the release, not an operator prerequisite. On every
+deploy, before the code switch, `deploy.sh` renders
+`pioneer-portal-fingerprint.service` from the candidate release with
+`WORKER_USER`/`WORKER_GROUP`, installs it under `${SYSTEMD_DIR}` (default
+`/etc/systemd/system`), runs `systemctl daemon-reload`, and enables it. If the
+rendered unit is unchanged, the install is a no-op.
 
-1. Stop the tag-polling timer (`systemctl stop pioneer-portal-deploy.timer`) and
-   confirm no deploy process is running.
-2. Copy `pioneer-portal-fingerprint.service` into `/etc/systemd/system/`.
-3. `systemctl daemon-reload`
-4. Confirm the gateway can see it: `systemctl cat pioneer-portal-fingerprint`
-5. Leave the unit **stopped** until compatible code, dependencies and migrations
-   are installed. A deploy starts it after the health check when the feature is
-   enabled; do not start it against a release without the worker command.
-
-The unit resolves its code through `/root/pioneer-portal` (the stable symlink) and
-runs `/root/pioneer-portal/.venv/bin/python manage.py run_fingerprint_worker`, so
+The unit resolves its code through `/srv/pioneer-portal` (the stable symlink) and
+runs `/srv/pioneer-portal/.venv/bin/python manage.py run_fingerprint_worker`, so
 `systemctl start` after a deploy always runs the release that is live right now.
 The release tree is mounted read-only for the unit; the worker writes nothing but
 the database and the journal.
+
+The gateway stops the worker before the symlink flip and starts it again after the
+portal health check, whether or not `FINGERPRINT_ENABLED` is on. While the flag is
+off, the command only performs maintenance and sleeps; it does not claim queued
+runs. This means enabling the feature later is a database-backed admin setting or
+an `.env` change plus a restart, never a missing service.
 
 ## What a deploy does
 
@@ -80,15 +82,15 @@ the database and the journal.
    sockets disabled.
 4. Writes `.fingerprint-release` (SDK version, wheel name and hash, lock commit,
    whether the runtime check was skipped) into the release directory.
-5. Stops the worker **before** the symlink flip and starts it only **after** the
-   portal health check passes. A worker that will not come up is a deploy failure
-   and rolls the code path back.
+5. Renders, installs and enables the worker unit from the candidate release, then
+   stops the worker **before** the symlink flip. It starts it again only **after**
+   the portal health check passes, even when the feature flag is off. A worker that
+   will not come up is a deploy failure and rolls the code path back.
 
 Refusals worth knowing:
 
 - `FINGERPRINT_ENABLED` is on but the release has no `run_fingerprint_worker`
   command → deploy aborts with nothing live changed.
-- `FINGERPRINT_ENABLED` is on but the unit is not installed → preflight fails.
 - The dependency tree does not match the lock → deploy aborts during staging.
 
 ## Checks after a deploy
@@ -96,10 +98,10 @@ Refusals worth knowing:
 ```sh
 systemctl is-active pioneer-portal-fingerprint          # active
 journalctl -u pioneer-portal-fingerprint -n 50 --no-pager
-cat /root/pioneer-portal/.fingerprint-release            # sdk_version, wheel, lock
-/root/pioneer-portal/.venv/bin/python \
-  /root/pioneer-portal/scripts/verify_sdk_runtime.py    # exits 0, offline
-cd /root/pioneer-portal && .venv/bin/python manage.py \
+cat /srv/pioneer-portal/.fingerprint-release            # sdk_version, wheel, lock
+/srv/pioneer-portal/.venv/bin/python \
+  /srv/pioneer-portal/scripts/verify_sdk_runtime.py    # exits 0, offline
+cd /srv/pioneer-portal && .venv/bin/python manage.py \
   run_fingerprint_worker --once                         # executes queued work; see below
 ```
 
@@ -117,8 +119,9 @@ reverse migrations and does not restore the database.
   release, so a worker never executes a retired tree against a newer schema.
 - If the previous release has no worker command, the worker is left stopped and
   the gateway says so; that is the correct end state, not a failure.
-- If the worker does not come back after a rollback, the gateway warns loudly:
-  fingerprint detection stays down until an operator starts the unit by hand.
+- If the worker does not come back after a rollback, the gateway warns loudly and
+  leaves the worker stopped; fingerprint detection stays down until the worker
+  failure is fixed. No manual unit installation is involved.
 - An additive fingerprint schema survives a code rollback; queued runs written by
   the newer release are simply not claimed until the feature is deployed again.
 

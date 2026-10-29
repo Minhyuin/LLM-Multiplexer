@@ -62,7 +62,9 @@ case "$name" in
   systemctl)
     cmd="$1"; unit="${@: -1}"; emit "systemctl:$cmd:$unit:$(target)"
     case "$cmd" in
-      cat) [ "$SCENARIO" != missing_unit ] || [ "$unit" != fp-worker ] ;;
+      cat) : ;;
+      daemon-reload) : ;;
+      enable) printf enabled > "$CASE_ROOT/worker-state" ;;
       stop)
         if [ "$unit" = fp-worker ]; then
           [ "$SCENARIO" != stop_failure ] || exit 1
@@ -75,6 +77,10 @@ case "$name" in
         fi ;;
       is-active) [ "$(command cat "$CASE_ROOT/worker-state")" = active ] ;;
     esac ;;
+  sed) "$REAL_SED" "$@" ;;
+  cmp) exit 1 ;;
+  install)
+    dest="${@: -1}"; mkdir -p "$(dirname "$dest")"; printf 'unit\n' > "$dest"; emit "install:${dest##*/}" ;;
   readlink)
     if [ "${@: -1}" = "$CASE_ROOT/app" ]; then target
     else command cat "${@: -1}" 2>/dev/null; fi ;;
@@ -102,7 +108,7 @@ def native_shell_path(path):
 
 
 SCENARIOS = ('bootstrap_failure', 'hash_failure', 'build_failure', 'pip_failure',
-             'runtime_failure', 'pending_migration', 'static_failure', 'missing_unit',
+             'runtime_failure', 'pending_migration', 'static_failure',
              'stop_failure', 'worker_failure', 'health_failure', 'disabled', 'success')
 
 
@@ -111,10 +117,13 @@ def prepare_case(root, scenario, *, enabled=True, lock=True, old_feature=True):
     root.mkdir(parents=True, exist_ok=False)
     shell_root = native_shell_path(root)
     for folder in ('bin', 'gateway', 'state', 'logs', 'torch', 'shared', 'app',
-                   'releases/v1.9.1', 'fixture/scripts'):
+                   'releases/v1.9.1', 'fixture/scripts',
+                   'fixture/deployment/gateway', 'systemd'):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / 'gateway/deploy.sh').write_bytes(SOURCE.read_bytes())
-    for command in ('git', 'curl', 'tar', 'python3', 'systemctl', 'readlink', 'ln', 'mv', 'pg_dump', 'sleep'):
+    (root / 'fixture/deployment/gateway/pioneer-portal-fingerprint.service').write_text(
+        '[Service]\nUser=@WORKER_USER@\nGroup=@WORKER_GROUP@\n', encoding='utf-8')
+    for command in ('git', 'curl', 'tar', 'python3', 'systemctl', 'readlink', 'ln', 'mv', 'install', 'pg_dump', 'sleep'):
         executable = root / 'bin' / command
         executable.write_text(MOCK, encoding='utf-8', newline='\n')
         executable.chmod(0o755)
@@ -143,6 +152,8 @@ def prepare_case(root, scenario, *, enabled=True, lock=True, old_feature=True):
         'LOG_DIR': shell_root + '/logs', 'TORCH_DIR': shell_root + '/torch',
         'LOG_FILE': shell_root + '/logs/deploy.log', 'LOCK_FILE': shell_root + '/deploy.lock',
         'ENV_FILE': shell_root + '/shared/.env', 'SERVICE': 'portal', 'WORKER_SERVICE': 'fp-worker',
+        'WORKER_USER': 'fixture', 'WORKER_GROUP': 'fixture',
+        'SYSTEMD_DIR': shell_root + '/systemd',
         'HEALTH_CHECKS': 'http://127.0.0.1:9/health/:200', 'HEALTH_RETRIES': '1',
         'HEALTH_DELAY': '0', 'EXTRA_HEALTH_CHECK': '', 'HEALTH_HOST': '', 'KEEP_RELEASES': '10',
         'ALLOW_AUTO_MIGRATE': '0', 'SKIP_DB_BACKUP': '0', 'DRY_RUN': '0', 'GIT_TIMEOUT': '10',
@@ -152,6 +163,7 @@ def prepare_case(root, scenario, *, enabled=True, lock=True, old_feature=True):
     launch = '\n'.join([
         '#!/usr/bin/env bash', 'set -u',
         'export REAL_MV="$(command -v mv)"',
+        'export REAL_SED="$(command -v sed)"',
         'export CASE_ROOT=' + shlex.quote(shell_root),
         'export SCENARIO=' + shlex.quote(scenario),
         'export PATH="$CASE_ROOT/bin:$PATH"', 'export MSYS_NO_PATHCONV=1',
@@ -199,10 +211,12 @@ class GatewayFailureTests(unittest.TestCase):
                 self.assert_preserved(result)
                 self.assertFalse(any(event.startswith('systemctl:stop:') for event in result['events']), result['output'])
 
-    def test_missing_worker_unit_fails_preflight(self):
-        result = self.run_case('missing_unit')
-        self.assert_preserved(result)
-        self.assertNotIn('download', result['events'])
+    def test_worker_unit_is_installed_even_when_feature_is_off(self):
+        result = self.run_case('success', enabled=False)
+        self.assertEqual(result['code'], 0, result['output'])
+        self.assertTrue(any(event.startswith('install:fp-worker.service') for event in result['events']), result['output'])
+        self.assertTrue(any(event.startswith('systemctl:enable:fp-worker') for event in result['events']), result['output'])
+        self.assertTrue(any(event.startswith('systemctl:start:fp-worker:') for event in result['events']), result['output'])
 
     def test_stop_failure_never_flips_code(self):
         result = self.run_case('stop_failure')
