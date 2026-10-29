@@ -15,7 +15,12 @@ from django.utils import timezone
 from core.forms import SiteSettingsForm
 from core.key_identifiers import key_index, key_suffix
 from core.models import SiteSettings
-from core.site_settings import configured_public_api_base_url, public_api_v1_url, query_trace_enabled
+from core.site_settings import (
+    configured_public_api_base_url,
+    normalize_orphan_lab_groups,
+    public_api_v1_url,
+    query_trace_enabled,
+)
 from core.utils import admin_required
 from fingerprints.config import enabled as fingerprint_enabled
 from fingerprints.config import limit as fingerprint_limit
@@ -335,6 +340,7 @@ def site_settings(request):
         obj = form.save(commit=False)
         obj.updated_by = request.user
         obj.save()
+        normalize_orphan_lab_groups()
         messages.success(request, "站点设置已保存。")
         return redirect("admin-site-settings")
     configured_origin = configured_public_api_base_url()

@@ -170,6 +170,22 @@ class ModelRefreshTests(ModelPanelTestMixin):
         self.assertEqual(payload["source_label"], model_catalog.SOURCE_LABELS[model_catalog.SOURCE_CONFIGURED])
         self.assertNotIn("labsk-portal-dedicated", payload["html"])
 
+    @mock.patch("dashboard.model_catalog.requests.get")
+    def test_rejected_configured_key_falls_back_to_member_key(self, get):
+        get.side_effect = [
+            FakeResponse(401, {"error": "Invalid API key"}),
+            FakeResponse(200, {"data": [{"id": "claude-4-opus"}]}),
+        ]
+
+        with self.settings(CLIPROXY_MODELS_API_KEY="labsk-stale"):
+            payload = self.refresh()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], f"Bearer {MEMBER_KEY}")
+        self.assertEqual(payload["source_label"], model_catalog.SOURCE_LABELS[model_catalog.SOURCE_MEMBER])
+        self.assertIn("claude-4-opus", payload["html"])
+
     def test_refresh_rejects_get(self):
         response = self.client.get(reverse("admin-credentials-models"))
 

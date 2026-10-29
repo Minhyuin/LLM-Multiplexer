@@ -24,6 +24,7 @@ class RegistrationConcurrencyTests(TransactionTestCase):
         return {
             "display_name": name, "username": username,
             "invitation_code": invitation or self.invitation.code,
+            "lab_group": "算法",
             "password1": "Test-Only-Strong-Pass!93",
         }
 

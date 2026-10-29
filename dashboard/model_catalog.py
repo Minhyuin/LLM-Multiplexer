@@ -88,6 +88,10 @@ PROVIDER_PREFIXES = [
 class ModelCatalogError(Exception):
     """The model list could not be read; the message is shown to the user."""
 
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
 
 def _endpoint():
     base = (getattr(settings, "CLIPROXY_BASE_URL", "") or "").rstrip("/")
@@ -96,11 +100,23 @@ def _endpoint():
     return f"{base}{MODEL_LIST_PATH}"
 
 
-def _usable_portal_key(user):
-    """Pick the key used to ask the proxy, preferring the least surprising one."""
-    configured = (getattr(settings, "CLIPROXY_MODELS_API_KEY", "") or "").strip()
-    if configured:
-        return configured, SOURCE_CONFIGURED
+def _key_candidates(user):
+    """Return usable keys in preference order, without duplicates.
+
+    The dedicated portal key is normally the right choice, but it can be stale
+    or revoked independently of the members' own keys.  Callers must be able to
+    fall back to the next candidate when proxy rejects that key.
+    """
+    candidates = []
+    seen = set()
+
+    def add(token, source):
+        token = (token or "").strip()
+        if token and token not in seen:
+            seen.add(token)
+            candidates.append((token, source))
+
+    add(getattr(settings, "CLIPROXY_MODELS_API_KEY", ""), SOURCE_CONFIGURED)
 
     if user is not None and getattr(user, "is_authenticated", False):
         own = (
@@ -110,7 +126,7 @@ def _usable_portal_key(user):
             .first()
         )
         if own is not None and own.is_usable:
-            return own.token_plaintext, SOURCE_MEMBER
+            add(own.token_plaintext, SOURCE_MEMBER)
 
     portal = (
         APIKey.objects.filter(status=APIKey.STATUS_ACTIVE)
@@ -119,9 +135,15 @@ def _usable_portal_key(user):
         .first()
     )
     if portal is not None:
-        return portal.token_plaintext, SOURCE_PORTAL
+        add(portal.token_plaintext, SOURCE_PORTAL)
 
-    return "", ""
+    return candidates
+
+
+def _usable_portal_key(user):
+    """Pick the preferred key (kept for callers that need one candidate)."""
+    candidates = _key_candidates(user)
+    return candidates[0] if candidates else ("", "")
 
 
 def _normalise(payload):
@@ -201,10 +223,14 @@ def _request_models(token):
 
     if response.status_code in (401, 403):
         raise ModelCatalogError(
-            f"模型接口拒绝了当前 Key（HTTP {response.status_code}），请在代理侧确认该 Key 仍有效。"
+            f"模型接口拒绝了当前 Key（HTTP {response.status_code}），请在代理侧确认该 Key 仍有效。",
+            status=response.status_code,
         )
     if response.status_code != 200:
-        raise ModelCatalogError(f"模型接口返回 HTTP {response.status_code}。")
+        raise ModelCatalogError(
+            f"模型接口返回 HTTP {response.status_code}。",
+            status=response.status_code,
+        )
 
     try:
         payload = response.json()
@@ -225,7 +251,8 @@ def collect_available_models(user, *, fetch=False):
     ``fetch=False`` (page render) only describes what a refresh would do; the
     proxy is contacted exclusively when the member presses the refresh button.
     """
-    token, source = _usable_portal_key(user)
+    candidates = _key_candidates(user)
+    source = candidates[0][1] if candidates else ""
     source_label = SOURCE_LABELS.get(source, "")
     context = {
         "models_loaded": False,
@@ -239,7 +266,7 @@ def collect_available_models(user, *, fetch=False):
         "models_hint": "",
     }
 
-    if not token:
+    if not candidates:
         context["models_error"] = NO_KEY_MESSAGE
         return context
 
@@ -247,10 +274,31 @@ def collect_available_models(user, *, fetch=False):
         context["models_hint"] = HINT_TEMPLATE.format(source=source_label)
         return context
 
-    try:
-        models = available_models(token)
-    except ModelCatalogError as exc:
-        context["models_error"] = str(exc)
+    rejected = None
+    for token, candidate_source in candidates:
+        try:
+            models = available_models(token)
+        except ModelCatalogError as exc:
+            if exc.status in (401, 403):
+                rejected = exc
+                logger.warning(
+                    "Model catalog key from %s was rejected (HTTP %s); trying the next candidate.",
+                    candidate_source,
+                    exc.status,
+                )
+                continue
+            context["models_error"] = str(exc)
+            return context
+        else:
+            source = candidate_source
+            source_label = SOURCE_LABELS.get(source, "")
+            break
+    else:
+        # Every candidate was rejected.  Prefer the member's own key error when
+        # there is one; otherwise the dedicated key's error is still accurate.
+        context["models_source"] = rejected and candidates[-1][1] or source
+        context["models_source_label"] = SOURCE_LABELS.get(context["models_source"], "")
+        context["models_error"] = str(rejected) if rejected else NO_KEY_MESSAGE
         return context
 
     groups = _group_by_provider(models)
@@ -259,6 +307,8 @@ def collect_available_models(user, *, fetch=False):
         "models_count": len(models),
         "models_provider_count": len(groups),
         "model_groups": groups,
+        "models_source": source,
+        "models_source_label": source_label,
         "models_fetched_at": datetime.now(tz=timezone.get_current_timezone()),
     })
     return context

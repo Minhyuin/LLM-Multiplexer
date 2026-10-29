@@ -7,6 +7,7 @@ from core.models import SiteSettings
 from core.site_settings import (
     configured_public_api_base_url,
     lab_group_choices,
+    normalize_orphan_lab_groups,
     public_api_base_url,
     public_api_v1_url,
     query_trace_enabled,
@@ -173,6 +174,38 @@ class FeatureOverrideTests(TestCase):
         self.assertFalse(saved.fingerprint_enabled)
         self.assertEqual(saved.fingerprint_daily_limit, 5)
         self.assertEqual(saved.lab_groups, "电控\n算法\n视觉")
+
+    def test_saving_groups_moves_orphans_into_unassigned(self):
+        admin = get_user_model().objects.create_user("group-admin", password="x", is_staff=True)
+        valid = get_user_model().objects.create_user("group-valid")
+        orphan = get_user_model().objects.create_user("group-orphan")
+        blank = get_user_model().objects.create_user("group-blank")
+        unassigned = get_user_model().objects.create_user("group-unassigned")
+        for user, group in (
+            (valid, "视觉"),
+            (orphan, "算法"),
+            (blank, ""),
+            (unassigned, "未分组"),
+        ):
+            user.profile.lab_group = group
+            user.profile.save(update_fields=["lab_group"])
+
+        self.client.force_login(admin)
+        response = self.client.post(
+            reverse("admin-site-settings"),
+            {"lab_groups": "电控\n视觉"},
+        )
+        self.assertRedirects(response, reverse("admin-site-settings"))
+
+        expected = {
+            "group-valid": "视觉",
+            "group-orphan": "未分组",
+            "group-blank": "未分组",
+            "group-unassigned": "未分组",
+        }
+        for username, group in expected.items():
+            profile = get_user_model().objects.get(username=username).profile
+            self.assertEqual(profile.lab_group, group, username)
 
 
 class QuotaPublicAPIBaseURLTests(TestCase):

@@ -22,6 +22,7 @@ class Profile(models.Model):
     GROUP_ALGO = "算法"
     GROUP_CONTROL = "电控"
     GROUP_MEDIA = "宣传"
+    GROUP_UNASSIGNED = "未分组"
     GROUP_CHOICES = [
         (GROUP_CONTROL, "电控"),
         (GROUP_ALGO, "算法"),

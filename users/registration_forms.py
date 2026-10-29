@@ -1,6 +1,6 @@
 """Forms for invitation-code self-registration.
 
-``RegistrationForm`` only exposes the five registration fields; a submitted
+``RegistrationForm`` only exposes the six registration fields; a submitted
 ``is_staff``/``is_superuser``/``role`` never reaches the created account.
 ``InvitationCodeForm`` is the admin-facing creation form: a blank code is
 replaced with a random 24-character uppercase-alphanumeric code, and the
@@ -14,6 +14,7 @@ from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from core.site_settings import lab_group_choices
 from users.models import (
     INVITATION_CODE_MAX_LENGTH,
     INVITATION_CODE_PATTERN,
@@ -117,6 +118,12 @@ class RegistrationForm(forms.Form):
             }
         ),
     )
+    lab_group = forms.ChoiceField(
+        label="实验室分组",
+        choices=(),
+        help_text="请选择你所在的分组；管理员后续调整分组时，原分组失效的账户会进入“未分组”。",
+        widget=forms.Select(attrs={"class": "form-control"}),
+    )
     password1 = forms.CharField(
         label="密码",
         strip=False,
@@ -138,6 +145,10 @@ class RegistrationForm(forms.Form):
             }
         ),
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["lab_group"].choices = lab_group_choices()
 
     def clean_display_name(self):
         value = re.sub(r"\s+", " ", (self.cleaned_data.get("display_name") or "").strip())

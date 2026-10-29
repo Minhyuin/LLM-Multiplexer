@@ -39,6 +39,22 @@ def lab_group_choices():
     return tuple(choices)
 
 
+def normalize_orphan_lab_groups() -> int:
+    """Move profiles whose group disappeared into the universal bucket.
+
+    This runs when an admin saves the group list, so a group rename/removal
+    cannot leave members with a value that every form would reject.
+    """
+    from users.models import Profile
+
+    valid = {value for value, _ in lab_group_choices()}
+    return (
+        Profile.objects.exclude(lab_group__in=valid)
+        .exclude(lab_group=Profile.GROUP_UNASSIGNED)
+        .update(lab_group=Profile.GROUP_UNASSIGNED)
+    )
+
+
 def configured_public_api_base_url() -> str:
     """Return the saved origin, or ``""`` when automatic detection is active."""
     value = (

@@ -28,6 +28,8 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from pypinyin import Style, lazy_pinyin, pinyin
 
+from core.site_settings import lab_group_choices
+
 from api_keys.cpa_sync import push_key_rotation_to_cliproxy
 from api_keys.member_tokens import PINYIN_MAP
 from api_keys.models import APIKey, APIKeyAlias
@@ -221,18 +223,22 @@ def register_member(cleaned_data: dict):
     username is taken, or the caller's transaction later rolls back.  The key is
     intentionally left ``pending`` until ``sync_registration_key`` succeeds.
 
-    Only the five registration fields are read: submitted ``is_staff``,
+    Only the six registration fields are read: submitted ``is_staff``,
     ``is_superuser`` or ``role`` values can never influence the created account.
     """
     display_name = str(cleaned_data.get("display_name") or "").strip()
     username = str(cleaned_data.get("username") or "").strip()
     invitation_code = _clean_invitation_code(str(cleaned_data.get("invitation_code") or ""))
     password = cleaned_data.get("password1") or cleaned_data.get("password") or ""
+    lab_group = str(cleaned_data.get("lab_group") or "").strip()
 
     if not display_name:
         raise ValidationError("请输入中文姓名")
     if len(display_name) > 50:
         raise ValidationError("中文姓名过长")
+    valid_groups = {value for value, _ in lab_group_choices()}
+    if lab_group not in valid_groups:
+        raise ValidationError("请选择有效的实验室分组")
     if not username and display_name:
         try:
             username = username_from_display_name(display_name)
@@ -273,11 +279,16 @@ def register_member(cleaned_data: dict):
 
         profile, _ = Profile.objects.get_or_create(
             user=user,
-            defaults={"display_name": display_name, "role": Profile.ROLE_USER},
+            defaults={
+                "display_name": display_name,
+                "role": Profile.ROLE_USER,
+                "lab_group": lab_group,
+            },
         )
         profile.display_name = display_name
         profile.role = Profile.ROLE_USER
-        profile.save(update_fields=["display_name", "role", "updated_at"])
+        profile.lab_group = lab_group
+        profile.save(update_fields=["display_name", "role", "lab_group", "updated_at"])
         # The post_save signal seeded the reverse cache with a profile whose
         # display_name was the username; drop it so callers see the real row.
         user._state.fields_cache.pop("profile", None)

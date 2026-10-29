@@ -22,6 +22,7 @@ class RegistrationViewTests(TestCase):
     def payload(self, **overrides):
         data = {
             "display_name": "张三", "username": "ZhangSan", "invitation_code": self.invitation.code,
+            "lab_group": "算法",
             "password1": "Test-Only-Strong-Pass!93", "password2": "Test-Only-Strong-Pass!93",
         }
         data.update(overrides)
@@ -32,10 +33,20 @@ class RegistrationViewTests(TestCase):
         self.assertContains(response, "邀请码")
         self.assertContains(response, "ZhangSan")
         self.assertContains(response, "中文姓名")
+        self.assertContains(response, "实验室分组")
         self.assertIn("no-store", response["Cache-Control"])
         self.assertContains(self.client.get(reverse("login")), reverse("register"))
         self.assertNotContains(response, self.invitation.code)
         self.assertEqual(self.client.put(reverse("register")).status_code, 405)
+
+    def test_registration_requires_a_known_lab_group(self):
+        missing = self.client.post(reverse("register"), self.payload(lab_group=""))
+        self.assertEqual(missing.status_code, 200)
+        self.assertContains(missing, "这个字段是必填项")
+        unknown = self.client.post(reverse("register"), self.payload(lab_group="不存在"))
+        self.assertEqual(unknown.status_code, 200)
+        self.assertContains(unknown, "选择一个有效的选项")
+        self.assertFalse(User.objects.filter(username="ZhangSan").exists())
 
     def test_registration_requires_csrf(self):
         client = Client(enforce_csrf_checks=True)

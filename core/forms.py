@@ -3,6 +3,7 @@ from django.conf import settings
 
 from core.attachments import check_batch_limits, human_size, validate_attachment
 from core.models import Announcement, DiscussionPost, DiscussionTopic, SiteSettings
+from core.site_settings import normalize_orphan_lab_groups
 
 ATTACHMENT_HELP = (
     "可一次选择多个文件（按住 Ctrl/⌘ 多选）。"
@@ -199,3 +200,9 @@ class SiteSettingsForm(PortalForm):
         if len(names) > 20:
             raise forms.ValidationError("最多配置 20 个用户分组。")
         return "\n".join(names)
+
+    def save(self, commit=True):
+        obj = super().save(commit=commit)
+        if commit:
+            normalize_orphan_lab_groups()
+        return obj

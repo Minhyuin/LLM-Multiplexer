@@ -58,6 +58,7 @@ class RegistrationTestBase(TestCase):
             "display_name": "张三",
             "username": "ZhangSan",
             "invitation_code": INVITATION,
+            "lab_group": "算法",
             "password1": STRONG_PASSWORD,
             "password2": STRONG_PASSWORD,
         }
@@ -310,6 +311,7 @@ class RegistrationFormTests(RegistrationTestBase):
             widget = RegistrationForm().fields[name].widget
             self.assertIn("form-control", widget.attrs.get("class", ""), name)
             self.assertIn("autocomplete", widget.attrs, name)
+        self.assertIn("form-control", RegistrationForm().fields["lab_group"].widget.attrs.get("class", ""))
 
     def test_random_invitation_codes_are_unique_uppercase_alphanumeric(self):
         first = unique_invitation_code()
@@ -327,6 +329,7 @@ class RegisterMemberServiceTests(RegistrationTestBase):
         self.assertTrue(user.is_active)
         self.assertFalse(user.is_staff)
         self.assertFalse(user.is_superuser)
+        self.assertEqual(user.profile.lab_group, "算法")
         self.assertTrue(user.check_password(STRONG_PASSWORD))
         self.assertNotEqual(user.password, STRONG_PASSWORD)
         self.assertEqual(user.profile.display_name, "张三")
@@ -443,6 +446,12 @@ class RegisterMemberServiceTests(RegistrationTestBase):
             self.register(display_name="")
         with self.assertRaises(ValidationError):
             self.register(password1="", password2="")
+
+    def test_service_requires_a_configured_lab_group(self):
+        for group in ("", "不存在"):
+            with self.assertRaises(ValidationError):
+                self.register(lab_group=group)
+        self.assertFalse(User.objects.filter(username="ZhangSan").exists())
 
     def test_invitation_code_is_case_sensitive(self):
         with self.assertRaises(ValidationError):
