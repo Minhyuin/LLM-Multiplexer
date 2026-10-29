@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 
+from core.site_settings import get_override
+
 UPSTREAM_COMMIT = "a4ef212df06817e8071acd05f00219f4c9eb2f9a"
 NON_TEXT = re.compile(r"(?:^|[-_/])(embedding|embeddings|rerank|reranker|whisper|tts|dall-e|imagen|veo|sora)(?:[-_/\d]|$)", re.I)
 
@@ -16,12 +18,28 @@ class FingerprintError(Exception):
         super().__init__(message)
 
 
+LIMIT_FIELDS = {
+    "DAILY_LIMIT": "fingerprint_daily_limit",
+    "ADMIN_DAILY_LIMIT": "fingerprint_admin_daily_limit",
+    "COOLDOWN_SECONDS": "fingerprint_cooldown_seconds",
+    "CONCURRENCY": "fingerprint_concurrency",
+}
+
+
 def limit(name, default):
+    field = LIMIT_FIELDS.get(name)
+    if field:
+        value = get_override(field, None)
+        if value is not None:
+            try:
+                return max(1, int(value))
+            except (TypeError, ValueError):
+                pass
     return max(1, int(getattr(settings, "FINGERPRINT_" + name, default)))
 
 
 def enabled():
-    return bool(getattr(settings, "FINGERPRINT_ENABLED", False))
+    return bool(get_override("fingerprint_enabled", getattr(settings, "FINGERPRINT_ENABLED", False)))
 
 
 def endpoint_base():

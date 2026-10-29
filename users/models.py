@@ -47,7 +47,7 @@ class Profile(models.Model):
     display_name = models.CharField(max_length=150, blank=True)
     email = models.EmailField(blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_USER)
-    lab_group = models.CharField(max_length=100, blank=True, choices=GROUP_CHOICES)
+    lab_group = models.CharField(max_length=100, blank=True)
     member_type = models.CharField(max_length=30, blank=True, choices=MEMBER_TYPE_CHOICES, default=MEMBER_CORE)
     grade = models.CharField(max_length=10, blank=True)
     is_dashboard_visible = models.BooleanField(default=True)

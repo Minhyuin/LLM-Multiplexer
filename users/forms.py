@@ -2,13 +2,31 @@ from django import forms
 from django.contrib.auth.models import User
 
 from api_keys.models import APIKey
+from core.site_settings import lab_group_choices
 from users.models import Profile
+
+
+def _set_dynamic_lab_group(form):
+    choices = list(lab_group_choices())
+    current = getattr(getattr(form, "instance", None), "lab_group", "") or ""
+    if current and current not in {value for value, _ in choices}:
+        choices.append((current, current))
+    form.fields["lab_group"] = forms.ChoiceField(
+        label="实验室分组",
+        choices=choices,
+        required=False,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
 
 
 class ProfileForm(forms.ModelForm):
     class Meta:
         model = Profile
         fields = ["display_name", "lab_group", "is_dashboard_visible"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _set_dynamic_lab_group(self)
 
 
 class AdminProfileQuotaForm(forms.ModelForm):
@@ -31,6 +49,7 @@ class AdminProfileQuotaForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.user_instance:
             self.fields["username"].initial = self.user_instance.username
+        _set_dynamic_lab_group(self)
 
     def clean_username(self):
         username = self.cleaned_data["username"].strip()
@@ -57,6 +76,10 @@ class AdminUserWithCliproxyKeyForm(forms.Form):
     grade = forms.RegexField(label="年级", regex=r"^20\d{2}$", help_text="请输入 20xx 格式，例如 2024")
     member_type = forms.ChoiceField(label="队员身份", choices=Profile.MEMBER_TYPE_CHOICES)
     cliproxy_key_plaintext = forms.CharField(label="CLIProxy API Key 明文", widget=forms.TextInput)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["lab_group"].choices = lab_group_choices()
 
     def clean_username(self):
         username = self.cleaned_data["username"].strip()

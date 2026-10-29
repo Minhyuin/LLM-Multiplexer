@@ -6,9 +6,13 @@ from django.urls import reverse
 from core.models import SiteSettings
 from core.site_settings import (
     configured_public_api_base_url,
+    lab_group_choices,
     public_api_base_url,
     public_api_v1_url,
+    query_trace_enabled,
 )
+from fingerprints.config import enabled as fingerprint_enabled
+from fingerprints.config import limit as fingerprint_limit
 
 
 @override_settings(ALLOWED_HOSTS=["8.134.194.161"])
@@ -103,6 +107,72 @@ class SiteSettingsAdminViewTests(TestCase):
         self.assertRedirects(response, reverse("admin-site-settings"))
         settings_obj.refresh_from_db()
         self.assertEqual(settings_obj.public_api_base_url, "")
+
+
+@override_settings(
+    QUERY_TRACE_ENABLED=False,
+    FINGERPRINT_ENABLED=False,
+    FINGERPRINT_DAILY_LIMIT=3,
+    FINGERPRINT_ADMIN_DAILY_LIMIT=20,
+    FINGERPRINT_COOLDOWN_SECONDS=60,
+    FINGERPRINT_CONCURRENCY=2,
+)
+class FeatureOverrideTests(TestCase):
+    def test_blank_overrides_follow_environment(self):
+        SiteSettings.objects.create()
+        self.assertFalse(query_trace_enabled())
+        self.assertFalse(fingerprint_enabled())
+        self.assertEqual(fingerprint_limit("DAILY_LIMIT", 3), 3)
+        self.assertEqual(fingerprint_limit("CONCURRENCY", 2), 2)
+        self.assertEqual(
+            [value for value, _ in lab_group_choices()],
+            ["电控", "算法", "机械", "宣传"],
+        )
+
+    def test_saved_overrides_take_precedence(self):
+        SiteSettings.objects.create(
+            query_trace_enabled=True,
+            fingerprint_enabled=True,
+            fingerprint_daily_limit=7,
+            fingerprint_admin_daily_limit=9,
+            fingerprint_cooldown_seconds=11,
+            fingerprint_concurrency=1,
+            lab_groups="电控\n算法\n算法\n视觉",
+        )
+        self.assertTrue(query_trace_enabled())
+        self.assertTrue(fingerprint_enabled())
+        self.assertEqual(fingerprint_limit("DAILY_LIMIT", 3), 7)
+        self.assertEqual(fingerprint_limit("ADMIN_DAILY_LIMIT", 20), 9)
+        self.assertEqual(fingerprint_limit("COOLDOWN_SECONDS", 60), 11)
+        self.assertEqual(fingerprint_limit("CONCURRENCY", 2), 1)
+        self.assertEqual(
+            [value for value, _ in lab_group_choices()],
+            ["电控", "算法", "视觉"],
+        )
+
+    def test_admin_can_save_feature_controls_and_groups(self):
+        admin = get_user_model().objects.create_user("feature-admin", password="x", is_staff=True)
+        self.client.force_login(admin)
+        response = self.client.post(
+            reverse("admin-site-settings"),
+            {
+                "public_api_base_url": "",
+                "query_trace_enabled": "1",
+                "fingerprint_enabled": "0",
+                "fingerprint_daily_limit": "5",
+                "fingerprint_admin_daily_limit": "12",
+                "fingerprint_cooldown_seconds": "30",
+                "fingerprint_concurrency": "1",
+                "lab_groups": "电控\n算法\n视觉\n视觉",
+            },
+            follow=True,
+        )
+        self.assertRedirects(response, reverse("admin-site-settings"))
+        saved = SiteSettings.objects.get(pk=1)
+        self.assertTrue(saved.query_trace_enabled)
+        self.assertFalse(saved.fingerprint_enabled)
+        self.assertEqual(saved.fingerprint_daily_limit, 5)
+        self.assertEqual(saved.lab_groups, "电控\n算法\n视觉")
 
 
 class QuotaPublicAPIBaseURLTests(TestCase):

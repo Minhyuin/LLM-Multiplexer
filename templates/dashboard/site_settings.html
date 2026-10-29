@@ -6,50 +6,115 @@
 <section class="page-hero mb-4">
     <span class="eyebrow-badge mb-2 d-inline-flex">Admin</span>
     <h3 class="mb-1">站点设置</h3>
-    <p class="text-muted mb-0">配置公开展示给成员的 API 地址。留空时会自动使用当前访问域名，因此新部署无需手工配置。</p>
+    <p class="text-muted mb-0">管理员可在这里调整公开地址、功能开关、检测限制和用户分组。留空的功能项会跟随环境变量。</p>
 </section>
 
 <div class="row g-4">
-    <div class="col-lg-7">
+    <div class="col-lg-8">
         <div class="card panel-card h-100"><div class="card-body p-4">
-            <h5 class="section-title">公开 API 地址</h5>
             <form method="post">
                 {% csrf_token %}
                 {% for error in form.non_field_errors %}
                     <div class="alert alert-danger" role="alert">{{ error }}</div>
                 {% endfor %}
-                <div class="mb-3">
+
+                <h5 class="section-title">公开 API 地址</h5>
+                <div class="mb-4">
                     <label for="{{ form.public_api_base_url.id_for_label }}" class="form-label fw-semibold">{{ form.public_api_base_url.label }}</label>
                     {{ form.public_api_base_url }}
                     {% if form.public_api_base_url.help_text %}<div class="form-text">{{ form.public_api_base_url.help_text }}</div>{% endif %}
                     {% for error in form.public_api_base_url.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    <p class="small text-muted mt-2 mb-0">只填写站点根地址，例如 <code>https://api.example.com</code>；可带 <code>/v1</code>，保存时会自动规范化。留空表示自动检测。</p>
                 </div>
-                <p class="small text-muted">只填写站点根地址，例如 <code>https://api.example.com</code>；可带 <code>/v1</code>，保存时会自动规范化。留空表示自动检测。</p>
+
+                <h5 class="section-title">功能开关</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
+                        <label for="{{ form.query_trace_enabled.id_for_label }}" class="form-label fw-semibold">{{ form.query_trace_enabled.label }}</label>
+                        {{ form.query_trace_enabled }}
+                        {% if form.query_trace_enabled.help_text %}<div class="form-text">{{ form.query_trace_enabled.help_text }}</div>{% endif %}
+                        {% for error in form.query_trace_enabled.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="col-md-6">
+                        <label for="{{ form.fingerprint_enabled.id_for_label }}" class="form-label fw-semibold">{{ form.fingerprint_enabled.label }}</label>
+                        {{ form.fingerprint_enabled }}
+                        {% if form.fingerprint_enabled.help_text %}<div class="form-text">{{ form.fingerprint_enabled.help_text }}</div>{% endif %}
+                        {% for error in form.fingerprint_enabled.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                </div>
+
+                <h5 class="section-title">指纹检测限制</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
+                        <label for="{{ form.fingerprint_daily_limit.id_for_label }}" class="form-label fw-semibold">{{ form.fingerprint_daily_limit.label }}</label>
+                        {{ form.fingerprint_daily_limit }}
+                        {% if form.fingerprint_daily_limit.help_text %}<div class="form-text">{{ form.fingerprint_daily_limit.help_text }}</div>{% endif %}
+                        {% for error in form.fingerprint_daily_limit.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="col-md-6">
+                        <label for="{{ form.fingerprint_admin_daily_limit.id_for_label }}" class="form-label fw-semibold">{{ form.fingerprint_admin_daily_limit.label }}</label>
+                        {{ form.fingerprint_admin_daily_limit }}
+                        {% if form.fingerprint_admin_daily_limit.help_text %}<div class="form-text">{{ form.fingerprint_admin_daily_limit.help_text }}</div>{% endif %}
+                        {% for error in form.fingerprint_admin_daily_limit.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="col-md-6">
+                        <label for="{{ form.fingerprint_cooldown_seconds.id_for_label }}" class="form-label fw-semibold">{{ form.fingerprint_cooldown_seconds.label }}</label>
+                        {{ form.fingerprint_cooldown_seconds }}
+                        {% if form.fingerprint_cooldown_seconds.help_text %}<div class="form-text">{{ form.fingerprint_cooldown_seconds.help_text }}</div>{% endif %}
+                        {% for error in form.fingerprint_cooldown_seconds.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="col-md-6">
+                        <label for="{{ form.fingerprint_concurrency.id_for_label }}" class="form-label fw-semibold">{{ form.fingerprint_concurrency.label }}</label>
+                        {{ form.fingerprint_concurrency }}
+                        {% if form.fingerprint_concurrency.help_text %}<div class="form-text">{{ form.fingerprint_concurrency.help_text }}</div>{% endif %}
+                        {% for error in form.fingerprint_concurrency.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                </div>
+
+                <h5 class="section-title">用户分组类型</h5>
+                <div class="mb-4">
+                    <label for="{{ form.lab_groups.id_for_label }}" class="form-label fw-semibold">{{ form.lab_groups.label }}</label>
+                    {{ form.lab_groups }}
+                    {% if form.lab_groups.help_text %}<div class="form-text">{{ form.lab_groups.help_text }}</div>{% endif %}
+                    {% for error in form.lab_groups.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    <p class="small text-muted mt-2 mb-0">保存后，用户列表、用户编辑和创建用户表单会立即使用新的分组选项；已有用户仍保留原分组值。</p>
+                </div>
+
                 <button class="btn btn-primary rounded-pill px-4" type="submit"><i class="bi bi-check-circle me-1"></i>保存设置</button>
             </form>
         </div></div>
     </div>
-    <div class="col-lg-5">
+    <div class="col-lg-4">
         <div class="card panel-card h-100"><div class="card-body p-4">
-            <h5 class="section-title">当前生效地址</h5>
-            <dl class="row mb-0">
-                <dt class="col-sm-4">Base URL</dt>
-                <dd class="col-sm-8"><code>{{ effective_public_api_base_url|default:"—" }}</code></dd>
-                <dt class="col-sm-4">来源</dt>
-                <dd class="col-sm-8">{% if configured_public_api_base_url %}管理员设置{% else %}当前访问域名（自动）{% endif %}</dd>
-                {% if configured_public_api_base_url %}
-                <dt class="col-sm-4">已保存根地址</dt>
-                <dd class="col-sm-8"><code>{{ configured_public_api_base_url }}</code></dd>
-                {% endif %}
-                <dt class="col-sm-4">最后更新</dt>
-                <dd class="col-sm-8">
+            <h5 class="section-title">当前生效值</h5>
+            <dl class="row mb-0 small">
+                <dt class="col-6">Base URL</dt>
+                <dd class="col-6"><code>{{ effective_public_api_base_url|default:"—" }}</code></dd>
+                <dt class="col-6">地址来源</dt>
+                <dd class="col-6">{% if configured_public_api_base_url %}管理员设置{% else %}当前访问域名（自动）{% endif %}</dd>
+                <dt class="col-6">Query 追溯</dt>
+                <dd class="col-6">{{ effective_query_trace_enabled|yesno:"开启,关闭" }}</dd>
+                <dt class="col-6">指纹检测</dt>
+                <dd class="col-6">{{ effective_fingerprint_enabled|yesno:"开启,关闭" }}</dd>
+                <dt class="col-6">每日次数（成员）</dt>
+                <dd class="col-6">{{ effective_fingerprint_daily_limit }}</dd>
+                <dt class="col-6">每日次数（管理员）</dt>
+                <dd class="col-6">{{ effective_fingerprint_admin_daily_limit }}</dd>
+                <dt class="col-6">检测冷却</dt>
+                <dd class="col-6">{{ effective_fingerprint_cooldown_seconds }} 秒</dd>
+                <dt class="col-6">检测并发</dt>
+                <dd class="col-6">{{ effective_fingerprint_concurrency }}</dd>
+                <dt class="col-6">最后更新</dt>
+                <dd class="col-6">
                     {% if settings_obj.updated_at %}
                         {{ settings_obj.updated_at|date:'Y-m-d H:i' }}
                         {% if settings_obj.updated_by %} · {{ settings_obj.updated_by.profile.display_name|default:settings_obj.updated_by.username }}{% endif %}
                     {% else %}—{% endif %}
                 </dd>
             </dl>
-            <p class="small text-muted mt-3 mb-0">成员在“我的额度”中看到并复制此地址。若通过反向代理访问，请确保代理传递了正确的 <code>Host</code> 请求头，否则自动检测会得到内部地址。</p>
+            <hr>
+            <p class="small text-muted mb-2">Query 追溯还需要 CPA 的 <code>request-log: true</code>；指纹检测还需要 worker 服务运行。</p>
+            <p class="small text-muted mb-0">“跟随环境变量”表示不写数据库覆盖值，部署时由 <code>.env</code> 决定。</p>
         </div></div>
     </div>
 </div>

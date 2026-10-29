@@ -15,8 +15,10 @@ from django.utils import timezone
 from core.forms import SiteSettingsForm
 from core.key_identifiers import key_index, key_suffix
 from core.models import SiteSettings
-from core.site_settings import configured_public_api_base_url, public_api_v1_url
+from core.site_settings import configured_public_api_base_url, public_api_v1_url, query_trace_enabled
 from core.utils import admin_required
+from fingerprints.config import enabled as fingerprint_enabled
+from fingerprints.config import limit as fingerprint_limit
 from dashboard.forms import ModelPricingForm
 from dashboard.model_catalog import collect_available_models
 from dashboard.models import ModelPricing
@@ -344,6 +346,12 @@ def site_settings(request):
             "settings_obj": instance,
             "configured_public_api_base_url": configured_origin,
             "effective_public_api_base_url": public_api_v1_url(request),
+            "effective_query_trace_enabled": query_trace_enabled(),
+            "effective_fingerprint_enabled": fingerprint_enabled(),
+            "effective_fingerprint_daily_limit": fingerprint_limit("DAILY_LIMIT", 3),
+            "effective_fingerprint_admin_daily_limit": fingerprint_limit("ADMIN_DAILY_LIMIT", 20),
+            "effective_fingerprint_cooldown_seconds": fingerprint_limit("COOLDOWN_SECONDS", 60),
+            "effective_fingerprint_concurrency": fingerprint_limit("CONCURRENCY", 2),
         },
     )
 
@@ -913,7 +921,7 @@ def query_trace_list(request):
         "model_options": list(model_options),
         "key_options": key_options,
         "last_job": UsageImportJob.objects.filter(source_name=QUERY_TRACE_SOURCE_NAME).first(),
-        "trace_enabled": settings.QUERY_TRACE_ENABLED,
+        "trace_enabled": query_trace_enabled(),
         "store_mode": settings.QUERY_TRACE_STORE_MODE,
         "retention_rows": settings.QUERY_TRACE_MAX_ROWS,
         "retention_days": settings.QUERY_TRACE_MAX_AGE_DAYS,

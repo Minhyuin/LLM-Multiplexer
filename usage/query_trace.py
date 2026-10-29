@@ -24,6 +24,7 @@ from django.conf import settings
 from django.utils import timezone as django_timezone
 
 from api_keys.models import APIKey
+from core.site_settings import query_trace_enabled as configured_query_trace_enabled
 from usage.models import QueryTrace, UsageImportJob, UsageLog
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def query_trace_log_dir() -> Path:
 
 
 def query_trace_enabled() -> bool:
-    return bool(getattr(settings, "QUERY_TRACE_ENABLED", True))
+    return configured_query_trace_enabled()
 
 
 def _setting_int(name: str, default: int) -> int:

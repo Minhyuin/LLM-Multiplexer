@@ -5,9 +5,38 @@ be reached through several hostnames.  An admin-editable override lives in
 ``SiteSettings``; when it is blank the request's own host is the fallback.
 """
 
+from django.conf import settings
 from django.core.exceptions import DisallowedHost
 
 from core.models import SiteSettings
+
+
+def get_override(field: str, default=None):
+    """Return a saved admin override, or ``default`` when the field is blank."""
+    value = SiteSettings.objects.filter(pk=1).values_list(field, flat=True).first()
+    return default if value is None else value
+
+
+def query_trace_enabled() -> bool:
+    default = bool(getattr(settings, "QUERY_TRACE_ENABLED", True))
+    return bool(get_override("query_trace_enabled", default))
+
+
+def lab_group_choices():
+    """Return configured group choices, falling back to the built-in four."""
+    from users.models import Profile
+
+    raw = get_override("lab_groups", "") or ""
+    names = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not names:
+        return tuple(Profile.GROUP_CHOICES)
+    seen = set()
+    choices = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            choices.append((name, name))
+    return tuple(choices)
 
 
 def configured_public_api_base_url() -> str:

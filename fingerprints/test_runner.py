@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 
 from api_keys.models import APIKey
 from fingerprints import runner, services
@@ -159,7 +159,7 @@ class RunnerTests(TestCase):
         self.assertEqual(services.quota_for(self.user)["remaining"], 3)
 
 
-class WorkerLifecycleTests(SimpleTestCase):
+class WorkerLifecycleTests(TransactionTestCase):
     def test_stop_terminates_then_kills_and_reaps_a_stuck_child(self):
         process = Mock()
         process.poll.return_value = None

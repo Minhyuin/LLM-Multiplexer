@@ -2,7 +2,7 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import URLValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, URLValidator
 from django.db import models
 
 from core.attachments import PrivateAttachmentStorage
@@ -126,6 +126,54 @@ class SiteSettings(models.Model):
         max_length=200,
         blank=True,
         help_text="例如 https://api.example.com；留空时自动使用成员访问门户的域名。",
+    )
+    query_trace_enabled = models.BooleanField(
+        "Query 追溯",
+        null=True,
+        blank=True,
+        default=None,
+        help_text="留空时跟随环境变量 QUERY_TRACE_ENABLED。",
+    )
+    fingerprint_enabled = models.BooleanField(
+        "指纹检测",
+        null=True,
+        blank=True,
+        default=None,
+        help_text="留空时跟随环境变量 FINGERPRINT_ENABLED。",
+    )
+    fingerprint_daily_limit = models.PositiveSmallIntegerField(
+        "普通成员每日检测次数",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(1000)],
+        help_text="留空时跟随环境变量 FINGERPRINT_DAILY_LIMIT。",
+    )
+    fingerprint_admin_daily_limit = models.PositiveSmallIntegerField(
+        "管理员每日检测次数",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(1000)],
+        help_text="留空时跟随环境变量 FINGERPRINT_ADMIN_DAILY_LIMIT。",
+    )
+    fingerprint_cooldown_seconds = models.PositiveIntegerField(
+        "同一用户检测冷却（秒）",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(86400)],
+        help_text="留空时跟随环境变量 FINGERPRINT_COOLDOWN_SECONDS。",
+    )
+    fingerprint_concurrency = models.PositiveSmallIntegerField(
+        "检测并发数",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(4)],
+        help_text="留空时跟随环境变量 FINGERPRINT_CONCURRENCY。",
+    )
+    lab_groups = models.TextField(
+        "用户分组类型",
+        blank=True,
+        default="",
+        help_text="每行一个分组名称，最多 20 个；留空时使用内置的 电控/算法/机械/宣传。",
     )
     updated_at = models.DateTimeField("更新时间", auto_now=True)
     updated_by = models.ForeignKey(
