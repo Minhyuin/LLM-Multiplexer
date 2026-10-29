@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+
+{% block title %}邀请码注册{% endblock %}
+{% block body_class %}login-page{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <div class="card panel-card border-0 login-card">
+            <div class="card-body p-4 p-lg-5">
+                <div class="text-center mb-4">
+                    <div class="feature-icon mx-auto mb-3 bg-primary-subtle text-primary"><i class="bi bi-person-plus"></i></div>
+                    <h3 class="mb-2">加入 PIONEER</h3>
+                    <p class="text-muted mb-0">使用管理员提供的邀请码创建账户</p>
+                </div>
+                <form method="post">
+                    {% csrf_token %}
+                    {% for error in form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endfor %}
+                    {% for field in form %}
+                    <div class="mb-3">
+                        <label for="{{ field.id_for_label }}" class="form-label fw-semibold">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.help_text %}<div class="form-text" id="{{ field.id_for_label }}_helptext">{{ field.help_text }}</div>{% endif %}
+                        {% for error in field.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    {% endfor %}
+                    <p class="small text-muted mb-3">注册后会自动为你创建 API Key。登录后可在“我的额度”中复制密钥和调用地址。</p>
+                    <button class="btn btn-primary w-100 rounded-pill py-2 fw-semibold" type="submit">创建账户</button>
+                </form>
+                <p class="text-center mt-4 mb-0 small">已有账户？<a href="{% url 'login' %}">返回登录</a></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

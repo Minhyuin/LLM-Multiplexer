@@ -96,4 +96,4 @@ jobs:
       - name: Verify PostgreSQL locks and queue lifecycle
         env:
           DJANGO_SETTINGS_MODULE: lab_portal.settings_test_postgres
-        run: python manage.py test fingerprints --noinput
+        run: python manage.py test fingerprints users --noinput

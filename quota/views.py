@@ -11,6 +11,7 @@ from api_keys.rotation import self_rotate_state
 from quota.activity import personal_activity
 from quota.models import UserQuotaSnapshot
 from usage.models import UsageLog
+from users.models import RegistrationProvision
 
 
 @login_required
@@ -65,6 +66,9 @@ def my_quota(request):
         "snapshot": snapshot,
         "snapshots": snapshots,
         "bound_keys": bound_keys,
+        "registration_sync_pending": RegistrationProvision.objects.filter(
+            user=request.user, synced_at__isnull=True, api_key__status=APIKey.STATUS_PENDING,
+        ).exists(),
         "cliproxy_base_url": f"{settings.CLIPROXY_BASE_URL.rstrip('/')}/v1",
         "range_name": range_name,
         "range_label": range_label,

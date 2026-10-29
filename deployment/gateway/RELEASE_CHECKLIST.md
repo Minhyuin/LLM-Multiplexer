@@ -30,6 +30,26 @@ See `FINGERPRINT_RELEASE.md` for the install steps, environment keys and rollbac
 - Do not run fault-injection or queue-draining tests against the production database; `--once` on the live release is the only sanctioned smoke test and it must be run while the feature is still disabled.
 - Rollback keeps the worker on the previous release and leaves it stopped when that release has no worker command. An additive fingerprint schema survives the rollback; queued runs written by the newer release are not claimed until the feature is redeployed.
 
+## Registration / invitation-code gates
+
+See `REGISTRATION_RELEASE.md` for the commands, timer install steps and rollback
+semantics.
+
+- Confirm the feature commit is on `main` and that the release tag contains it
+  (`git merge-base --is-ancestor <commit> <tag>`); a tag cut from a feature branch
+  is overwritten by the next main release.
+- The migration must stay additive (new tables or nullable/defaulted columns). Keep the
+  production `ALLOW_AUTO_MIGRATE=1` behaviour only with the gateway's verified
+  pre-migrate dump; expect `state/predeploy-<tag>-*.sql.gz` after the deploy.
+- After the deploy, anonymous `GET /accounts/register/` must return 200 and
+  `/users/admin/invitations/` must be reachable as staff. The health endpoint does
+  not cover either page.
+- Install `pioneer-portal-registration-sync.timer` only after the release is live;
+  stop/disable it before a code rollback to a release without
+  `sync_registration_keys`.
+- Never store real invitation codes or secrets in the repository, unit files or
+  deploy logs.
+
 ## Access and inherited operational boundaries
 
 Django login middleware does not protect nginx aliases. The inspected media directory was empty; do not introduce private uploads without authenticated delivery. Public static assets and the minimal health endpoint remain intentionally public. Existing nonportal subscription routes are outside the community feature's authorization boundary.

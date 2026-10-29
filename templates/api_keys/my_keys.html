@@ -29,7 +29,7 @@
                 <tr>
                     <td>{{ key.name }}</td>
                     <td><code>{{ key.token_masked }}</code></td>
-                    <td><span class="badge text-bg-secondary">{{ key.get_status_display }}</span></td>
+                    <td><span class="badge text-bg-secondary">{% if key.status == 'pending' and key.registration_provision %}正在同步（自动重试）{% else %}{{ key.get_status_display }}{% endif %}</span></td>
                     <td>{{ key.created_at|date:'Y-m-d H:i' }}</td>
                     <td>{{ key.last_used_at|date:'Y-m-d H:i'|default:'-' }}</td>
                     <td>

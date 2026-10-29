@@ -1,0 +1,29 @@
+[Unit]
+Description=Pioneer Portal registration key sync (persistent outbox retry)
+Documentation=file:/srv/pioneer-portal/deployment/gateway/REGISTRATION_RELEASE.md
+# The command talks to PostgreSQL and the key-provisioning upstream, so wait for
+# the network. It reads the live release through the stable symlink; it does not
+# serve HTTP and must not stop or restart the portal.
+After=network-online.target postgresql.service pioneer-portal.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The portal service on this host runs as pioneer:pioneer (not www-data).
+User=pioneer
+Group=pioneer
+WorkingDirectory=/srv/pioneer-portal
+# Same environment file as pioneer-portal.service: settings.py also loads
+# <release>/.env by itself, this keeps POSTGRES_* identical for systemd runs.
+EnvironmentFile=/srv/pioneer-portal/.env
+ExecStart=/srv/pioneer-portal/.venv/bin/python /srv/pioneer-portal/manage.py sync_registration_keys
+# A stuck upstream must not hold the unit forever; pending rows simply retry on
+# the next timer tick.
+TimeoutStartSec=180
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+SyslogIdentifier=pioneer-registration-sync
+
+[Install]
+WantedBy=multi-user.target

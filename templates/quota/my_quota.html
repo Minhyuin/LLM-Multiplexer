@@ -23,6 +23,12 @@
     </div>
 </section>
 
+{% if registration_sync_pending %}
+<div class="alert alert-info" role="status">
+    你的 API Key 已创建，正在同步启用。系统会自动重试，请稍后刷新此页；完成后会在下方显示调用信息。
+</div>
+{% endif %}
+
 {% include 'quota/activity.html' %}
 
 <div class="row g-3 mb-4">

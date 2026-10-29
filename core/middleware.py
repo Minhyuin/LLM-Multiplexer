@@ -4,13 +4,13 @@ from django.utils.cache import add_never_cache_headers
 
 
 class PortalLoginRequiredMiddleware:
-    """Protect application views; only login and the minimal probe are public.
+    """Protect application views; login, registration and the probe are public.
 
     Static assets are served separately. Uploaded media must NOT be made public
     by a reverse proxy; an application middleware cannot protect proxy aliases.
     """
 
-    public_view_names = {"login", "admin:login", "health-check"}
+    public_view_names = {"login", "register", "admin:login", "health-check"}
 
     def __init__(self, get_response):
         self.get_response = get_response

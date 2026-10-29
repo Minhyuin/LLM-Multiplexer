@@ -15,7 +15,7 @@ from core.utils import admin_required, is_portal_admin
 
 @login_required
 def api_key_list(request):
-    keys = APIKey.objects.filter(user=request.user).order_by("-created_at")
+    keys = APIKey.objects.filter(user=request.user).select_related("registration_provision").order_by("-created_at")
     latest_plain_token = request.session.pop("latest_plain_token", None)
     return render(request, "api_keys/my_keys.html", {
         "keys": keys,

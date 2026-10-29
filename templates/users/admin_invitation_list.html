@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+
+{% block title %}管理员 - 邀请码{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+            <span class="eyebrow-badge mb-2 d-inline-flex">Admin</span>
+            <h3 class="mb-1">邀请码管理</h3>
+            <p class="text-muted mb-0">发布邀请码，邀请成员自助注册。每个邀请码可在有效期内供多人使用。</p>
+        </div>
+        <a href="{% url 'admin-user-list' %}" class="btn btn-outline-secondary rounded-pill">用户列表</a>
+    </div>
+</section>
+<div class="card panel-card mb-4"><div class="card-body p-4">
+    <h5 class="mb-3">发布邀请码</h5>
+    <form method="post">
+        {% csrf_token %}
+        {% for error in form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endfor %}
+        <div class="row g-3 align-items-start">
+            {% for field in form %}
+            <div class="{% if field.name == 'code' %}col-md-7{% else %}col-md-3{% endif %}">
+                <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% for error in field.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+            </div>
+            {% endfor %}
+            <div class="col-md-2 align-self-center"><button type="submit" class="btn btn-primary rounded-pill w-100">发布</button></div>
+        </div>
+    </form>
+    <p class="small text-muted mt-3 mb-0">有效期从发布时开始，按整天计算，最多 7 天。到期或停用后无法继续注册，已注册账户不受影响。注册入口：<a href="{% url 'register' %}">/accounts/register/</a></p>
+</div></div>
+<div class="card panel-card"><div class="card-body">
+    <div class="table-responsive soft-table-wrap">
+        <table class="table soft-table align-middle">
+            <thead><tr><th>邀请码</th><th>有效期</th><th>到期时间（北京时间）</th><th>已注册</th><th>发布人</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+            {% for invitation in page_obj %}
+                <tr>
+                    <td><code class="user-select-all text-break">{{ invitation.code }}</code></td>
+                    <td>{{ invitation.valid_days }} 天</td>
+                    <td>{{ invitation.expires_at|date:'Y-m-d H:i:s' }}</td>
+                    <td>{{ invitation.registration_count }}</td>
+                    <td>{{ invitation.created_by.username|default:'-' }}</td>
+                    <td>{% if not invitation.is_active %}<span class="badge text-bg-secondary">已停用</span>{% elif invitation.is_valid %}<span class="badge text-bg-success">有效</span>{% else %}<span class="badge text-bg-secondary">已过期</span>{% endif %}</td>
+                    <td>
+                        {% if invitation.is_active and invitation.is_valid %}
+                        <form method="post" action="{% url 'admin-invitation-revoke' invitation.pk %}">
+                            {% csrf_token %}<button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">停用</button>
+                        </form>
+                        {% else %}—{% endif %}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7" class="text-center text-muted py-4">尚未发布邀请码</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if page_obj.has_other_pages %}
+    <nav class="d-flex justify-content-center gap-3 mt-3" aria-label="邀请码分页">
+        {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">上一页</a>{% endif %}
+        <span>第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</span>
+        {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">下一页</a>{% endif %}
+    </nav>
+    {% endif %}
+</div></div>
+{% endblock %}

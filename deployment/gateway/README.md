@@ -106,6 +106,20 @@ current + previous one are never pruned.
 systemctl disable --now pioneer-portal-deploy.timer
 ```
 
+## Registration / invitation codes
+
+The registration feature adds one host-level timer plus its oneshot service, which
+the gateway does **not** manage: `pioneer-portal-registration-sync.timer` runs
+`manage.py sync_registration_keys` once a minute to drain the
+`RegistrationProvision` outbox. Install it once after the release that ships the
+command is live, and stop it before rolling back to a release without the
+command. Full steps, invitation creation and verification:
+[`REGISTRATION_RELEASE.md`](REGISTRATION_RELEASE.md).
+
+Production paths are `/srv/pioneer-portal*` and the portal runs as
+`pioneer:pioneer`; the `/root/...` examples elsewhere in this file describe the
+early host layout and must not be copied to that server.
+
 ## Design decisions worth knowing
 
 * **The symlink is the deploy.** `ln -sfn` + `mv -T` is atomic, so gunicorn and

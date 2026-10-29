@@ -1,0 +1,16 @@
+[Unit]
+Description=Retry Pioneer Portal registration key sync every minute
+Documentation=file:/srv/pioneer-portal/deployment/gateway/REGISTRATION_RELEASE.md
+
+[Timer]
+# Every minute; AccuracySec keeps a little slack without piling runs up.
+OnCalendar=*:0/1
+AccuracySec=10s
+RandomizedDelaySec=5s
+# A missed tick after downtime is irrelevant: the outbox rows are persistent and
+# the next tick retries them. Avoid a catch-up burst.
+Persistent=false
+Unit=pioneer-portal-registration-sync.service
+
+[Install]
+WantedBy=timers.target

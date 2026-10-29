@@ -82,6 +82,7 @@
                         <li class="nav-item"><a class="nav-link {% if current_url == 'admin-model-pricing' %}active{% endif %}" href="/dashboard/admin/pricing/"><i class="bi bi-cash-coin me-1"></i>模型价格</a></li>
                         <li class="nav-item"><a class="nav-link {% if current_url == 'admin-query-traces' or current_url == 'admin-query-trace-detail' %}active{% endif %}" href="/dashboard/admin/queries/"><i class="bi bi-search me-1"></i>Query 追溯</a></li>
                         <li class="nav-item"><a class="nav-link {% if current_url == 'admin-user-list' %}active{% endif %}" href="/users/admin/list/"><i class="bi bi-people me-1"></i>用户列表</a></li>
+                        <li class="nav-item"><a class="nav-link {% if current_url == 'admin-invitation-list' %}active{% endif %}" href="{% url 'admin-invitation-list' %}"><i class="bi bi-ticket-perforated me-1"></i>邀请码</a></li>
                         <li class="nav-item"><a class="nav-link {% if current_url == 'import-usage-logs' %}active{% endif %}" href="/usage/import/"><i class="bi bi-arrow-repeat me-1"></i>导入日志</a></li>
                     {% endif %}
                 {% endif %}
