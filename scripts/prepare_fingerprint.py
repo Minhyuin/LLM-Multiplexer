@@ -242,43 +242,59 @@ def _opener() -> urllib.request.OpenerDirector:
     return opener
 
 
-def raw_url(lock: dict, relpath: str) -> str:
+def _github_slug(lock: dict) -> str:
     repository = lock["upstream"]["repository"]
     if "github.com/" not in repository:
         raise Failure(f"the HTTPS bootstrap needs a github.com repository URL, got {repository!r}")
-    slug = repository.split("github.com/", 1)[1].removesuffix(".git")
-    return f"https://raw.githubusercontent.com/{slug}/{lock['upstream']['commit']}/{relpath}"
+    return repository.split("github.com/", 1)[1].removesuffix(".git")
+
+
+def raw_url(lock: dict, relpath: str) -> str:
+    return f"https://raw.githubusercontent.com/{_github_slug(lock)}/{lock['upstream']['commit']}/{relpath}"
+
+
+def cdn_url(lock: dict, relpath: str) -> str:
+    """Fallback mirror for networks where raw.githubusercontent.com resets TLS."""
+    return f"https://cdn.jsdelivr.net/gh/{_github_slug(lock)}@{lock['upstream']['commit']}/{relpath}"
 
 
 def download(lock: dict, entry: dict, target: Path) -> None:
-    """Fetch one locked file and only replace ``target`` once its size and hash match."""
+    """Fetch one locked file and only replace ``target`` once its size and hash match.
+
+    jsDelivr is tried first because GitHub raw connections can hang on large
+    detected blobs; the raw URL remains a fallback for hosts that block the CDN.
+    Both serve the same pinned commit.  A checksum mismatch is still fatal and
+    never falls through to another mirror.
+    """
     relpath = entry["path"]
-    url = raw_url(lock, relpath)
-    opener = _opener()
-    last: Exception | None = None
-    for attempt in range(1, HTTP_ATTEMPTS + 1):
-        try:
-            with opener.open(url, timeout=HTTP_TIMEOUT) as response:
-                if response.status != 200:
-                    raise Failure(f"HTTP {response.status} for {relpath}")
-                body = response.read()
-        except (urllib.error.URLError, TimeoutError, OSError, Failure) as exc:
-            last = exc
-            if attempt < HTTP_ATTEMPTS:
-                time.sleep(2 * attempt)
-            continue
-        if len(body) != entry["size"]:
-            raise Failure(f"{relpath}: got {len(body)} bytes, lock says {entry['size']}")
-        digest = sha256_bytes(body)
-        if digest != entry["sha256"]:
-            raise Failure(f"{relpath}: sha256 {digest} does not match the lock")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temp = target.parent / f".{target.name}.part"
-        temp.write_bytes(body)
-        os.replace(temp, target)
-        log(f"  fetched {relpath} ({entry['size']} bytes)")
-        return
-    raise Failure(f"could not download {relpath} after {HTTP_ATTEMPTS} attempts: {last}")
+    failures: list[str] = []
+    for url in (cdn_url(lock, relpath), raw_url(lock, relpath)):
+        opener = _opener()
+        last: Exception | None = None
+        for attempt in range(1, HTTP_ATTEMPTS + 1):
+            try:
+                with opener.open(url, timeout=HTTP_TIMEOUT) as response:
+                    if response.status != 200:
+                        raise Failure(f"HTTP {response.status} for {relpath}")
+                    body = response.read()
+            except (urllib.error.URLError, TimeoutError, OSError, Failure) as exc:
+                last = exc
+                if attempt < HTTP_ATTEMPTS:
+                    time.sleep(2 * attempt)
+                continue
+            if len(body) != entry["size"]:
+                raise Failure(f"{relpath}: got {len(body)} bytes, lock says {entry['size']}")
+            digest = sha256_bytes(body)
+            if digest != entry["sha256"]:
+                raise Failure(f"{relpath}: sha256 {digest} does not match the lock")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temp = target.parent / f".{target.name}.part"
+            temp.write_bytes(body)
+            os.replace(temp, target)
+            log(f"  fetched {relpath} ({entry['size']} bytes)")
+            return
+        failures.append(f"{url}: {last}")
+    raise Failure(f"could not download {relpath} from any mirror: {'; '.join(failures)}")
 
 
 def bootstrap(lock: dict, repo_root: Path) -> int:

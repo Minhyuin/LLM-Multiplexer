@@ -309,6 +309,24 @@ class ManifestFixture(unittest.TestCase):
             self.assertEqual((fresh / relpath).read_bytes(), body, relpath)
         self.assertEqual((fresh / BINARY_PATH).read_bytes(), BINARY_FILE)
 
+    def test_cdn_fallback_uses_the_same_pinned_commit(self) -> None:
+        lock = {
+            "upstream": {
+                "repository": "https://github.com/Ikaleio/lm-detector.git",
+                "commit": "a4ef212df06817e8071acd05f00219f4c9eb2f9a",
+            }
+        }
+        self.assertEqual(
+            prep.raw_url(lock, "LICENSE"),
+            "https://raw.githubusercontent.com/Ikaleio/lm-detector/"
+            "a4ef212df06817e8071acd05f00219f4c9eb2f9a/LICENSE",
+        )
+        self.assertEqual(
+            prep.cdn_url(lock, "LICENSE"),
+            "https://cdn.jsdelivr.net/gh/Ikaleio/lm-detector@"
+            "a4ef212df06817e8071acd05f00219f4c9eb2f9a/LICENSE",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
