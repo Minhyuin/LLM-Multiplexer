@@ -154,16 +154,20 @@ python manage.py createsuperuser
 
 ## 4.3 最关键配置：CLIProxy 管理接口地址
 
-从你现在的报错看，门户会去请求：
+门户通过管理接口上的用量队列取数，见 [`fetch_usage_queue_events()`](usage/services.py:737)：
 
-- `http://127.0.0.1:8317/v0/management/usage`
-
-这说明 [`fetch_cliproxy_usage_records()`](usage/services.py:112) 依赖一个 **CLIProxy 管理接口地址**。
+- `http://127.0.0.1:8317/v8/management/observability/usage/queue`（首选）
+- `http://127.0.0.1:8317/v0/management/usage-queue`（旧构建的兼容别名，仅在首选返回 404 时回退）
 
 所以迁移后必须确认两件事：
 
 1. 远端 CLIProxy 的管理接口是不是也监听在 `127.0.0.1:8317`
-2. 路径是不是 `/v0/management/usage`
+2. `CLIPROXY_MANAGEMENT_KEY` 是否对这两个路径可用（`curl` 带 key 能返回 200）
+
+这个队列是**消费式**的：取走即删，并且超出 `redis-usage-queue-retention-seconds`
+的事件会被内核丢弃。因此必须由 `pioneer-portal-usage-sync.timer` 每 30 秒抽取一次，
+参见 [`USAGE_SYNC_RELEASE.md`](deployment/gateway/USAGE_SYNC_RELEASE.md)。只把页面打开当作
+同步触发点，会漏掉两次访问之间的绝大部分请求。
 
 ### 推荐部署关系
 
@@ -242,9 +246,10 @@ curl http://127.0.0.1:8317/v0/management/usage
 
 这时通常要调整的是门户里的解析逻辑：
 
-- [`normalize_usage_record()`](usage/services.py:31)
-- [`resolve_related_objects()`](usage/services.py:63)
-- [`fetch_cliproxy_usage_records()`](usage/services.py:105)
+- [`normalize_queue_event()`](usage/services.py:761)
+- [`normalize_usage_record()`](usage/services.py:92)
+- [`resolve_related_objects()`](usage/services.py:120)
+- [`fetch_usage_queue_events()`](usage/services.py:737)
 
 而不是先去动 CLIProxy 主体。
 

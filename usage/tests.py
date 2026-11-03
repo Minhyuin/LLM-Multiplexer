@@ -17,6 +17,7 @@ from usage.services import (
     aggregate_dashboard,
     auto_sync_cliproxy_usage_records,
     fetch_keeper_usage_events,
+    fetch_usage_queue_events,
     import_keeper_usage_events,
     import_usage_records,
     sync_cliproxy_usage_records,
@@ -94,7 +95,7 @@ class CliProxySyncFallbackTests(TestCase):
         self.assertFalse(triggered)
         self.assertEqual(latest_job, job)
 
-    def test_sync_uses_usage_queue_when_legacy_usage_endpoint_is_missing(self):
+    def test_sync_uses_usage_queue_when_no_keeper_is_configured(self):
         user = User.objects.create_user(username="member", password="password")
         raw_token = "sk-queue-token"
         metadata = APIKey.build_token_metadata(raw_token)
@@ -108,9 +109,6 @@ class CliProxySyncFallbackTests(TestCase):
             source=APIKey.SOURCE_CLIPROXY,
             status=APIKey.STATUS_ACTIVE,
         )
-        response = requests.Response()
-        response.status_code = 404
-        missing_usage_endpoint = requests.HTTPError(response=response)
         queue_event = {
             "request_id": "queue-request-1",
             "api_key": raw_token,
@@ -131,7 +129,6 @@ class CliProxySyncFallbackTests(TestCase):
 
         with (
             patch.dict(os.environ, {"CPA_USAGE_KEEPER_BASE_URL": "", "CPA_USAGE_KEEPER_USERNAME": "", "CPA_USAGE_KEEPER_PASSWORD": "", "CPA_USAGE_KEEPER_DB": ""}),
-            patch("usage.services.fetch_cliproxy_usage_records", side_effect=missing_usage_endpoint),
             patch("usage.services.fetch_usage_queue_events", return_value=[queue_event]),
         ):
             job = sync_cliproxy_usage_records()
@@ -145,7 +142,7 @@ class CliProxySyncFallbackTests(TestCase):
         self.assertEqual(log.cached_tokens, 4)
         self.assertEqual(log.reasoning_tokens, 3)
 
-    def test_sync_prefers_keeper_when_legacy_usage_endpoint_is_missing_and_keeper_is_configured(self):
+    def test_sync_prefers_keeper_when_one_is_configured(self):
         user = User.objects.create_user(username="member", password="password")
         raw_token = "sk-5VnRiyWZhangYanMing"
         metadata = APIKey.build_token_metadata(raw_token)
@@ -159,8 +156,6 @@ class CliProxySyncFallbackTests(TestCase):
             source=APIKey.SOURCE_CLIPROXY,
             status=APIKey.STATUS_ACTIVE,
         )
-        response = requests.Response()
-        response.status_code = 404
         keeper_event = {
             "id": "96886",
             "timestamp": timezone.now().isoformat(),
@@ -180,7 +175,6 @@ class CliProxySyncFallbackTests(TestCase):
 
         with (
             patch.dict(os.environ, {"CPA_USAGE_KEEPER_BASE_URL": "http://keeper", "CPA_USAGE_KEEPER_USERNAME": "admin", "CPA_USAGE_KEEPER_PASSWORD": "secret", "CPA_USAGE_KEEPER_DB": ""}),
-            patch("usage.services.fetch_cliproxy_usage_records", side_effect=requests.HTTPError(response=response)),
             patch("usage.services.fetch_keeper_usage_events", return_value=[keeper_event]),
             patch("usage.services.fetch_usage_queue_events") as queue_fetch,
         ):
@@ -192,6 +186,43 @@ class CliProxySyncFallbackTests(TestCase):
         log = UsageLog.objects.get(request_id="keeper-96886")
         self.assertEqual(log.user, user)
         self.assertEqual(log.total_tokens, 21322)
+
+    def test_queue_fetch_prefers_v8_route_and_falls_back_to_v0(self):
+        seen = []
+
+        def fake_get(url, headers=None, timeout=None):
+            seen.append(url)
+            response = requests.Response()
+            # 404 on the v8 contract is the only case that may retry the alias.
+            response.status_code = 404 if "/v8/management/" in url else 200
+            response._content = b'[{"request_id": "r1"}]'
+            return response
+
+        with patch("usage.services.requests.get", side_effect=fake_get):
+            events = fetch_usage_queue_events(count=7)
+
+        self.assertEqual(events, [{"request_id": "r1"}])
+        self.assertTrue(seen[0].endswith("/v8/management/observability/usage/queue?count=7"))
+        self.assertTrue(seen[1].endswith("/v0/management/usage-queue?count=7"))
+
+    def test_queue_fetch_surfaces_the_last_404_when_no_route_answers(self):
+        def fake_get(url, headers=None, timeout=None):
+            response = requests.Response()
+            response.status_code = 404
+            return response
+
+        with patch("usage.services.requests.get", side_effect=fake_get):
+            with self.assertRaises(requests.HTTPError):
+                fetch_usage_queue_events(count=1)
+
+    def test_empty_queue_tick_does_not_persist_an_import_job(self):
+        with patch.dict(os.environ, {"CPA_USAGE_KEEPER_BASE_URL": "", "CPA_USAGE_KEEPER_USERNAME": "", "CPA_USAGE_KEEPER_PASSWORD": "", "CPA_USAGE_KEEPER_DB": ""}):
+            with patch("usage.services.fetch_usage_queue_events", return_value=[]):
+                job = sync_cliproxy_usage_records()
+
+        self.assertEqual(job.imported_count, 0)
+        self.assertIsNone(job.pk)
+        self.assertEqual(UsageImportJob.objects.filter(source_name="cliproxy-usage-queue").count(), 0)
 
 
 class KeeperUsageImportTests(TestCase):

@@ -239,57 +239,6 @@ def import_usage_records(records, source_type, source_name):
     return job
 
 
-def fetch_cliproxy_usage_records():
-    headers = {"Authorization": f"Bearer {settings.CLIPROXY_MANAGEMENT_KEY}"}
-    response = requests.get(
-        urljoin(settings.CLIPROXY_MANAGEMENT_BASE_URL, "/v0/management/usage"),
-        headers=headers,
-        timeout=30,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
-def normalize_cliproxy_usage_payload(payload):
-    if isinstance(payload, list):
-        return payload
-
-    if not isinstance(payload, dict):
-        raise ValueError("cliproxy usage 返回格式无效")
-
-    for key in ["items", "data", "usage", "records"]:
-        if isinstance(payload.get(key), list):
-            return payload[key]
-
-    usage_block = payload.get("usage") or {}
-    apis = usage_block.get("apis") or {}
-    records = []
-
-    for api_key_identifier, api_item in apis.items():
-        models = api_item.get("models") or {}
-        for model_name, model_item in models.items():
-            for detail in model_item.get("details") or []:
-                token_info = detail.get("tokens") or {}
-                records.append(
-                    {
-                        "request_id": detail.get("request_id") or f"cliproxy-{api_key_identifier[:12]}-{model_name}-{detail.get('timestamp')}",
-                        "user_identifier": detail.get("source") or "",
-                        "api_key_identifier": api_key_identifier,
-                        "model_name": model_name,
-                        "prompt_tokens": token_info.get("input_tokens") or 0,
-                        "completion_tokens": token_info.get("output_tokens") or 0,
-                        "total_tokens": token_info.get("total_tokens") or 0,
-                        "estimated_cost": detail.get("estimated_cost") or detail.get("cost") or 0,
-                        "status_code": 500 if detail.get("failed") else 200,
-                        "error_message": detail.get("error_message") or "",
-                        "request_time": detail.get("timestamp"),
-                        "raw_payload": detail,
-                    }
-                )
-
-    return records
-
-
 def keeper_sync_configured():
     return all(
         os.getenv(name)
@@ -674,44 +623,26 @@ def sync_keeper_usage_records(limit=KEEPER_DB_SYNC_BATCH, with_query_traces=True
 
 
 def sync_cliproxy_usage_records():
-    try:
-        payload = fetch_cliproxy_usage_records()
-    except requests.HTTPError as exc:
-        response = getattr(exc, "response", None)
-        if getattr(response, "status_code", None) == 404:
-            if keeper_db_available() or keeper_sync_configured():
-                try:
-                    return sync_keeper_usage_records()
-                except (requests.RequestException, sqlite3.Error) as keeper_exc:
-                    # Never fail silently here: a dead keeper used to leave the
-                    # portal quietly stuck on an always-empty queue for days.
-                    logger.error("keeper sync failed, falling back to usage-queue: %s", keeper_exc)
-            return sync_cliproxy_usage_queue_records(count=10000)
-        raise
+    """Pull whatever usage the proxy still holds into the portal ledger.
 
-    records = normalize_cliproxy_usage_payload(payload)
+    The proxy no longer serves an aggregate usage endpoint: `/v0/management/usage`
+    answers 404 on every v8 build we have run, so probing it first only burned a
+    round trip per tick and buried the real failure mode. What is left is the
+    realtime usage queue, which keeps events only for
+    `redis-usage-queue-retention-seconds` and deletes them as it hands them out —
+    so this function must be driven by a timer, not by page views
+    (deployment/gateway/USAGE_SYNC_RELEASE.md).
 
-    # Only import records whose api_key_identifier matches a key bound in the portal.
-    # This filters out usage from external/outsourced keys not managed here.
-    # Rotated aliases count as managed keys, so old-key records survive the filter.
-    known_plaintexts, known_hashes, known_prefixes = _known_key_identifier_sets()
-
-    filtered = []
-    for record in records:
-        key_id = (record.get("api_key_identifier") or "").strip()
-        if not key_id:
-            # No key identifier — include it (might be matched by user_identifier later)
-            filtered.append(record)
-            continue
-        if key_id in known_plaintexts:
-            filtered.append(record)
-        elif APIKey.hash_token(key_id) in known_hashes:
-            filtered.append(record)
-        elif key_id[:12] in known_prefixes:
-            filtered.append(record)
-        # else: external key, skip
-
-    return import_usage_records(filtered, UsageImportJob.SOURCE_API, "cliproxy-management-api")
+    A configured keeper still wins: it is a complete ledger, the queue is not.
+    """
+    if keeper_db_available() or keeper_sync_configured():
+        try:
+            return sync_keeper_usage_records()
+        except (requests.RequestException, sqlite3.Error) as keeper_exc:
+            # Never fail silently here: a dead keeper used to leave the
+            # portal quietly stuck on an always-empty queue for days.
+            logger.error("keeper sync failed, falling back to usage-queue: %s", keeper_exc)
+    return sync_cliproxy_usage_queue_records(count=10000)
 
 
 def sync_cliproxy_usage_queue_records(count=10000):
@@ -720,6 +651,17 @@ def sync_cliproxy_usage_queue_records(count=10000):
         events = events.get("items") or events.get("data") or events.get("messages") or []
     if not isinstance(events, list):
         events = []
+
+    if not events:
+        # The 30s drain mostly finds an empty queue; persisting one job row per
+        # tick would add ~2.9k rows a day that carry no information.
+        return UsageImportJob(
+            source_type=UsageImportJob.SOURCE_API,
+            source_name="cliproxy-usage-queue",
+            imported_count=0,
+            skipped_count=0,
+            failed_count=0,
+        )
 
     job = UsageImportJob.objects.create(source_type=UsageImportJob.SOURCE_API, source_name="cliproxy-usage-queue")
     imported = skipped = failed = 0
@@ -784,16 +726,36 @@ def auto_sync_cliproxy_usage_records(force=False):
         SYNC_LOCK.release()
 
 
+# `/v8/management/...` is the v8 contract (verified against CLIProxyAPI 8.1.0);
+# `/v0/management/usage-queue` is the legacy alias that older builds keep serving.
+USAGE_QUEUE_PATHS = (
+    "/v8/management/observability/usage/queue",
+    "/v0/management/usage-queue",
+)
+
+
 def fetch_usage_queue_events(count=100):
-    """Consume real-time events from CPAP /v0/management/usage-queue endpoint."""
+    """Consume realtime events from the proxy usage queue.
+
+    This is a destructive read: the proxy deletes each event as it hands it out
+    and drops whatever ages out first, so every caller has to run on a timer
+    faster than the retention window. See USAGE_SYNC_RELEASE.md.
+    """
     headers = {"Authorization": f"Bearer {settings.CLIPROXY_MANAGEMENT_KEY}"}
-    response = requests.get(
-        urljoin(settings.CLIPROXY_MANAGEMENT_BASE_URL, f"/v0/management/usage-queue?count={count}"),
-        headers=headers,
-        timeout=30,
-    )
-    response.raise_for_status()
-    return response.json()
+    last_error = None
+    for path in USAGE_QUEUE_PATHS:
+        response = requests.get(
+            urljoin(settings.CLIPROXY_MANAGEMENT_BASE_URL, f"{path}?count={count}"),
+            headers=headers,
+            timeout=30,
+        )
+        if response.status_code == 404:
+            # Older build: keep walking the list instead of failing the tick.
+            last_error = requests.HTTPError(f"404 on {path}", response=response)
+            continue
+        response.raise_for_status()
+        return response.json()
+    raise last_error
 
 
 def normalize_queue_event(event):

@@ -1,0 +1,29 @@
+[Unit]
+Description=Pioneer Portal usage-queue drain (30s cadence)
+Documentation=file:/srv/pioneer-portal/deployment/gateway/USAGE_SYNC_RELEASE.md
+# Needs PostgreSQL and the proxy management API on loopback. It never serves
+# HTTP and must not stop or restart the portal.
+After=network-online.target postgresql.service cliproxyapi.service pioneer-portal.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Same identity and environment file as pioneer-portal.service, so POSTGRES_*
+# and the CLIPROXY_* management settings resolve exactly as they do for the web
+# workers.
+User=pioneer
+Group=pioneer
+WorkingDirectory=/srv/pioneer-portal
+EnvironmentFile=/srv/pioneer-portal/.env
+ExecStart=/srv/pioneer-portal/.venv/bin/python /srv/pioneer-portal/manage.py sync_cliproxy_usage
+# A stalled management call must not stack ticks behind it. The proxy holds
+# events for redis-usage-queue-retention-seconds, so a skipped tick is simply
+# drained by the next one.
+TimeoutStartSec=60
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+SyslogIdentifier=pioneer-usage-sync
+
+[Install]
+WantedBy=multi-user.target

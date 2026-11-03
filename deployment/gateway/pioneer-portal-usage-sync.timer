@@ -1,0 +1,20 @@
+[Unit]
+Description=Drain the Pioneer Portal usage queue every 30 seconds
+Documentation=file:/srv/pioneer-portal/deployment/gateway/USAGE_SYNC_RELEASE.md
+
+[Timer]
+# Twice a minute. The proxy deletes each usage event as it is handed out and
+# drops whatever ages out of its retention window, so this cadence is what makes
+# the ledger complete; the window (3600s) only decides how long an outage of
+# this timer can last without losing data.
+OnCalendar=*-*-* *:*:00
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+RandomizedDelaySec=2s
+# Nothing to catch up: an empty queue drains instantly, and the events missed
+# while the host was down are gone regardless.
+Persistent=false
+Unit=pioneer-portal-usage-sync.service
+
+[Install]
+WantedBy=timers.target
