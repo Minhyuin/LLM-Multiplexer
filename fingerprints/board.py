@@ -49,6 +49,23 @@ def _similarity(score):
     return f"{score:.4f}".rstrip("0").rstrip(".")
 
 
+def _probability(value):
+    """Render the closed-set probability exactly like the credentials panel.
+
+    Values are ratios in [0, 1] and are shown with one decimal plus a percent
+    sign, trailing zeros dropped -- the same rule `static/js/fingerprints.js`
+    uses, so the board and the panel never disagree about the same number.
+    Anything else (a legacy payload that already carries a percentage, or a
+    missing value) is printed as-is or as a dash rather than rescaled.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        return "—"
+    if value <= 1:
+        text = f"{value * 100:.1f}".rstrip("0").rstrip(".")
+        return f"{text or '0'}%"
+    return f"{value:.2f}"
+
+
 def _candidates(result):
     """The three closest reference models, closest first.
 
@@ -66,6 +83,8 @@ def _candidates(result):
         "model": row.get("model") or "",
         "score": row.get("score"),
         "similarity": _similarity(row.get("score")),
+        "probability": row.get("probability"),
+        "probability_text": _probability(row.get("probability")),
     } for row in ranked[:3]]
 
 

@@ -155,6 +155,36 @@ class FingerprintBoardTests(TestCase):
         self.assertEqual(response.context["rows"][0]["candidates"][0]["similarity"], "3.218")
         self.assertNotContains(response, "321.8%")
 
+    def test_board_shows_the_closed_set_probability_as_a_percentage(self):
+        member = self.make_user("calibrated")
+        result = {**RESULT, "probability_status": "reference_calibrated", "candidates": [
+            {"model": "glm-5.3-flash", "score": 3.218355877520982, "probability": 0.729173788530231},
+            {"model": "glm-5.3-flashx", "score": 3.012536535878699, "probability": 0.27044767715325957},
+            {"model": "claude-fable-5.1", "score": 1.3325772270877758, "probability": 8.244993968268832e-05},
+        ]}
+        self.make_run(member, finished=timezone.now(), result=result)
+        self.client.force_login(self.make_user("reader"))
+
+        response = self.client.get(self.url)
+
+        shown = response.context["rows"][0]["candidates"]
+        self.assertEqual([row["probability_text"] for row in shown], ["72.9%", "27%", "0%"])
+        self.assertContains(response, "参考库内概率")
+
+    def test_board_leaves_the_probability_blank_when_the_run_was_partial(self):
+        member = self.make_user("partial")
+        result = {**RESULT, "verdict": "partial", "probability_status": "unavailable", "candidates": [
+            {"model": "glm-5.3-flashx", "score": 2.6619078239203264, "probability": None},
+        ]}
+        self.make_run(member, finished=timezone.now(), result=result)
+        self.client.force_login(self.make_user("reader"))
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context["rows"][0]["candidates"][0]["probability_text"], "—")
+        self.assertNotContains(response, "nan")
+        self.assertNotContains(response, "None%")
+
     # --- deletion ---------------------------------------------------------------
     def test_a_member_cannot_delete_a_result(self):
         member = self.make_user("member")

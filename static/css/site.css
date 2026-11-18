@@ -1152,6 +1152,10 @@ select:focus-visible {
     margin-bottom: 1rem;
 }
 
+.fp-board-legend {
+    line-height: 1.6;
+}
+
 .fp-board-count {
     font-size: 0.78rem;
     letter-spacing: 0.06em;
@@ -1258,6 +1262,18 @@ select:focus-visible {
 .fp-board-score {
     color: var(--text-soft);
     font-variant-numeric: tabular-nums;
+}
+
+/* Closed-set probability, right of the similarity. Kept visually distinct so a
+   ranking score and a probability never read as the same number. */
+.fp-board-probability {
+    flex: 0 0 auto;
+    min-width: 3.4rem;
+    text-align: right;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-soft);
+    opacity: 0.85;
 }
 
 .fp-board-delete {

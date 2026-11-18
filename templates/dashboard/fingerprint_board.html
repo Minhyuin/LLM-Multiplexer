@@ -11,6 +11,10 @@
     </p>
 </section>
 
+<section class="fp-board-legend text-muted small mb-3">
+    相似度是检测器给出的排序得分（越大越接近）；参考库内概率只在样本完整、结论为「参考排名可用」时才有，表示在封闭参考库里的相对可能性，不是真伪判定。
+</section>
+
 {% if not fingerprint_enabled %}
     <div class="alert alert-warning" role="alert">指纹检测当前处于关闭状态，看板只显示已有历史记录。</div>
 {% endif %}
@@ -60,6 +64,7 @@
                                     <li>
                                         <span class="fp-board-candidate-name">{{ candidate.model }}</span>
                                         <span class="fp-board-score"{% if candidate.score is not None %} title="相似度 {{ candidate.score|floatformat:4 }}"{% endif %}>{{ candidate.similarity }}</span>
+                                        <span class="fp-board-probability"{% if candidate.probability is not None %} title="参考库内概率 {{ candidate.probability_text }}"{% endif %}>{{ candidate.probability_text }}</span>
                                     </li>
                                     {% endfor %}
                                 </ol>
