@@ -36,9 +36,31 @@ def retention_hours():
     return limit("HISTORY_HOURS", 168)
 
 
+def _similarity(score):
+    # A missing score is reported as missing; never render it as 0%.
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        return "—"
+    return f"{score * 100:.1f}%"
+
+
 def _candidates(result):
+    """The three closest reference models, closest first.
+
+    The detector already returns its ranking, but the board sorts again so the
+    column heading stays true even if that ordering ever changes upstream.
+    """
     rows = result.get("candidates") if isinstance(result, dict) else None
-    return [row for row in rows or [] if isinstance(row, dict)][:3]
+    ranked = [row for row in rows or [] if isinstance(row, dict)]
+    ranked.sort(
+        key=lambda row: row.get("score") if isinstance(row.get("score"), (int, float))
+        and not isinstance(row.get("score"), bool) else float("-inf"),
+        reverse=True,
+    )
+    return [{
+        "model": row.get("model") or "",
+        "score": row.get("score"),
+        "similarity": _similarity(row.get("score")),
+    } for row in ranked[:3]]
 
 
 def _rows(runs):

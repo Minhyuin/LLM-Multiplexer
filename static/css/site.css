@@ -1225,6 +1225,7 @@ select:focus-visible {
     padding: 0;
     display: grid;
     gap: 0.15rem;
+    counter-reset: fp-rank;
 }
 
 .fp-board-candidates li {
@@ -1235,7 +1236,22 @@ select:focus-visible {
     font-size: 0.85rem;
 }
 
+/* Rank badge: the column is an ordered top-three, so the position is part of
+   the information and must survive a stylesheet without list markers. */
+.fp-board-candidates li::before {
+    counter-increment: fp-rank;
+    content: counter(fp-rank);
+    flex: 0 0 1.05rem;
+    font-size: 0.7rem;
+    line-height: 1.05rem;
+    text-align: center;
+    color: var(--text-soft);
+    background: rgba(100, 116, 139, 0.14);
+    border-radius: 50%;
+}
+
 .fp-board-candidate-name {
+    flex: 1 1 auto;
     overflow-wrap: anywhere;
 }
 

@@ -113,6 +113,36 @@ class FingerprintBoardTests(TestCase):
         self.assertTrue(FingerprintRun.objects.filter(pk=kept.pk).exists())
         self.assertFalse(FingerprintRun.objects.filter(pk=dropped.pk).exists())
 
+    def test_board_shows_the_three_closest_models_ranked_by_similarity(self):
+        member = self.make_user("ranked")
+        candidates = [
+            {"model": "far-model", "score": 0.31, "probability": None},
+            {"model": "closest-model", "score": 0.94, "probability": None},
+            {"model": "middle-model", "score": 0.72, "probability": None},
+            {"model": "fourth-model", "score": 0.18, "probability": None},
+        ]
+        self.make_run(member, finished=timezone.now(), result={**RESULT, "candidates": candidates})
+        self.client.force_login(self.make_user("reader"))
+
+        response = self.client.get(self.url)
+
+        shown = response.context["rows"][0]["candidates"]
+        self.assertEqual([row["model"] for row in shown], ["closest-model", "middle-model", "far-model"])
+        self.assertEqual([row["similarity"] for row in shown], ["94.0%", "72.0%", "31.0%"])
+        self.assertContains(response, "相似度最高的 3 个模型")
+        self.assertNotContains(response, "候选参考模型")
+
+    def test_board_renders_a_missing_similarity_without_inventing_a_number(self):
+        member = self.make_user("unscored")
+        self.make_run(member, finished=timezone.now(),
+                      result={**RESULT, "candidates": [{"model": "mystery-model", "score": None}]})
+        self.client.force_login(self.make_user("reader"))
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context["rows"][0]["candidates"][0]["similarity"], "—")
+        self.assertNotContains(response, "0.0%")
+
     # --- deletion ---------------------------------------------------------------
     def test_a_member_cannot_delete_a_result(self):
         member = self.make_user("member")

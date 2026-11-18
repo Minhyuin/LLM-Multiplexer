@@ -32,7 +32,7 @@
                         <th scope="col">模型</th>
                         <th scope="col">最可能家族</th>
                         <th scope="col">结论</th>
-                        <th scope="col">候选参考模型</th>
+                        <th scope="col">相似度最高的 3 个模型</th>
                         {% if can_delete %}<th scope="col" class="text-end">操作</th>{% endif %}
                     </tr>
                 </thead>
@@ -55,14 +55,14 @@
                         </td>
                         <td>
                             {% if row.candidates %}
-                                <ul class="fp-board-candidates">
+                                <ol class="fp-board-candidates">
                                     {% for candidate in row.candidates %}
                                     <li>
                                         <span class="fp-board-candidate-name">{{ candidate.model }}</span>
-                                        <span class="fp-board-score">{% if candidate.score is not None %}{{ candidate.score|floatformat:3 }}{% else %}—{% endif %}</span>
+                                        <span class="fp-board-score"{% if candidate.score is not None %} title="相似度 {{ candidate.score|floatformat:4 }}"{% endif %}>{{ candidate.similarity }}</span>
                                     </li>
                                     {% endfor %}
-                                </ul>
+                                </ol>
                             {% else %}<span class="text-muted">—</span>{% endif %}
                         </td>
                         {% if can_delete %}
