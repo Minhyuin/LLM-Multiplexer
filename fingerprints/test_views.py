@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from api_keys.models import APIKey
 from fingerprints import services
-from fingerprints.config import UPSTREAM_COMMIT
+from fingerprints.config import UPSTREAM_COMMIT, limit
 from fingerprints.models import (
     FingerprintCoordinator,
     FingerprintQuotaDay,
@@ -248,14 +248,15 @@ class StateViewTests(FingerprintViewTestCase):
         self.assertEqual(FingerprintRun.objects.count(), 1)
         self.assertEqual(self.model_calls, [], "a read asked upstream for the model list")
 
-    def test_history_rolls_off_after_twenty_four_hours_and_never_crosses_members(self):
+    def test_history_rolls_off_after_the_retention_window_and_never_crosses_members(self):
+        window = limit("HISTORY_HOURS", 168)
         user, key = self.member()
         recent = self.make_run(user, key, status=FingerprintRun.COMPLETED,
-                              created=timezone.now() - timedelta(hours=23),
-                              finished=timezone.now() - timedelta(hours=23))
+                              created=timezone.now() - timedelta(hours=window - 1),
+                              finished=timezone.now() - timedelta(hours=window - 1))
         self.make_run(user, key, status=FingerprintRun.COMPLETED,
-                      created=timezone.now() - timedelta(hours=25),
-                      finished=timezone.now() - timedelta(hours=25))
+                      created=timezone.now() - timedelta(hours=window + 1),
+                      finished=timezone.now() - timedelta(hours=window + 1))
         other, other_key = self.member("other")
         self.make_run(other, other_key, status=FingerprintRun.FAILED,
                       created=timezone.now() - timedelta(minutes=5),
@@ -544,8 +545,8 @@ class DetailViewTests(FingerprintViewTestCase):
     def test_expired_history_is_not_readable(self):
         user, key = self.member()
         expired = self.make_run(user, key, status=FingerprintRun.COMPLETED,
-                               created=timezone.now() - timedelta(hours=25),
-                               finished=timezone.now() - timedelta(hours=25))
+                               created=timezone.now() - timedelta(hours=limit("HISTORY_HOURS", 168) + 1),
+                               finished=timezone.now() - timedelta(hours=limit("HISTORY_HOURS", 168) + 1))
         self.login(user)
 
         response = self.client.get(reverse("fingerprint-detail", kwargs={"run_id": expired.pk}))

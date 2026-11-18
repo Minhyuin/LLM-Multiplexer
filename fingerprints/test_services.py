@@ -508,6 +508,10 @@ class QuotaTests(FingerprintServiceTestCase):
             self.assertRejected("daily_limit", 429, services.create_run, other, other_key.pk, MODEL, uuid.uuid4())
         self.assertFalse(FingerprintRun.objects.exists())
 
+    # The production window is seven days, but a pruned run still has to be old
+    # enough to sit outside the two-day quota ledger; shrinking the window keeps
+    # this test about refunds instead of about calendar arithmetic.
+    @override_settings(FINGERPRINT_HISTORY_HOURS=2)
     def test_pruning_history_never_refunds_consumed_rounds(self):
         user, key = self.owner()
         yesterday = date(2026, 10, 26)

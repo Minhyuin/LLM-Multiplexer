@@ -698,3 +698,18 @@ class AttachmentTests(TestCase):
         response = self.client.get(reverse("admin:core_attachment_change", args=[attachment.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse("attachment-serve", args=[attachment.pk]))
+
+@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+class HomeFooterTests(TestCase):
+    """The home footer pairs the release tag with a link to the GitHub releases."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.member = get_user_model().objects.create_user("footer-member", password="test-password")
+
+    def test_footer_links_the_release_tag_to_github_releases(self):
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("home"))
+        self.assertContains(response, "门户版本 ·")
+        self.assertContains(response, settings.PORTAL_GITHUB_RELEASES_URL)
+        self.assertContains(response, 'aria-label="在 GitHub 查看门户的版本发布"')

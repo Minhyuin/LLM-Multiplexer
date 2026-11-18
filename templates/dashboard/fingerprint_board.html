@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}指纹检测看板{% endblock %}
+
+{% block content %}
+<section class="page-hero mb-3">
+    <span class="eyebrow-badge mb-2 d-inline-flex">fingerprints</span>
+    <h3 class="mb-1">指纹检测看板</h3>
+    <p class="text-muted mb-0">
+        全队成员都能在这里看到所有人的模型指纹检测结论，只保留最近 {{ retention_days }} 天{% if can_delete %}；管理员可以删除单条记录{% endif %}。
+    </p>
+</section>
+
+{% if not fingerprint_enabled %}
+    <div class="alert alert-warning" role="alert">指纹检测当前处于关闭状态，看板只显示已有历史记录。</div>
+{% endif %}
+
+<section class="card panel-card">
+    <div class="card-body">
+        <div class="fp-board-head">
+            <span class="fp-board-count">共 {{ total }} 条结果</span>
+            {% if can_delete %}<span class="small text-muted">管理员可删除</span>{% endif %}
+        </div>
+
+        {% if rows %}
+        <div class="table-responsive">
+            <table class="table fp-board-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">时间</th>
+                        <th scope="col">成员</th>
+                        <th scope="col">模型</th>
+                        <th scope="col">最可能家族</th>
+                        <th scope="col">结论</th>
+                        <th scope="col">候选参考模型</th>
+                        {% if can_delete %}<th scope="col" class="text-end">操作</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr>
+                        <td class="fp-board-time">{{ row.finished_at|date:'m-d H:i' }}</td>
+                        <td>{{ row.member }}</td>
+                        <td><span class="fp-board-model">{{ row.model_id }}</span></td>
+                        <td>
+                            {% if row.family %}{{ row.family }}
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if row.verdict %}
+                                <span class="fp-board-verdict fp-board-verdict-{{ row.verdict }}">{{ row.verdict_label }}</span>
+                            {% else %}
+                                <span class="fp-board-verdict fp-board-verdict-none" title="{{ row.error_message }}">{{ row.status_label }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if row.candidates %}
+                                <ul class="fp-board-candidates">
+                                    {% for candidate in row.candidates %}
+                                    <li>
+                                        <span class="fp-board-candidate-name">{{ candidate.model }}</span>
+                                        <span class="fp-board-score">{% if candidate.score is not None %}{{ candidate.score|floatformat:3 }}{% else %}—{% endif %}</span>
+                                    </li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        {% if can_delete %}
+                        <td class="text-end">
+                            <form method="post" action="{% url 'fingerprint-board-delete' row.id %}" onsubmit="return confirm('删除这条检测结果？');">
+                                {% csrf_token %}
+                                <input type="hidden" name="page" value="{{ page_obj.number }}">
+                                <button type="submit" class="btn btn-sm fp-board-delete">删除</button>
+                            </form>
+                        </td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% include 'core/pagination.html' %}
+        {% else %}
+        <div class="empty-state">
+            <h3 class="h5">还没有检测结果</h3>
+            <p class="mb-0">在「模型与凭证」里对任一模型发起一次指纹检测，结论会出现在这里。</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

@@ -15,6 +15,11 @@ def env_bool(name: str, default: bool = False) -> bool:
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-change-me")
 DEBUG = env_bool("DJANGO_DEBUG", True)
 PORTAL_RELEASE_VERSION = os.getenv("PORTAL_RELEASE_VERSION", "")
+# The footer shows a GitHub mark next to the version; it points at the releases
+# page so a reader can see what the tag they are running actually changed.
+PORTAL_GITHUB_RELEASES_URL = os.getenv(
+    "PORTAL_GITHUB_RELEASES_URL", "https://github.com/Minhyuin/LLM-Multiplexer/releases"
+)
 
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if host.strip()]
 CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "http://127.0.0.1,http://localhost").split(",") if origin.strip()]
@@ -162,7 +167,9 @@ FINGERPRINT_RUN_TIMEOUT = int(os.getenv("FINGERPRINT_RUN_TIMEOUT", 420))
 FINGERPRINT_MAX_OUTPUT_TOKENS = int(os.getenv("FINGERPRINT_MAX_OUTPUT_TOKENS", 8192))
 FINGERPRINT_RESPONSE_MAX_BYTES = int(os.getenv("FINGERPRINT_RESPONSE_MAX_BYTES", 1048576))
 FINGERPRINT_LEASE_SECONDS = 30
-FINGERPRINT_HISTORY_HOURS = 24
+# Results live seven days: the shared fingerprint board (v1.12.4) is the reason
+# the window is not 24 hours any more. `maintenance()` deletes past this age.
+FINGERPRINT_HISTORY_HOURS = 168
 FINGERPRINT_HISTORY_LIMIT = 200
 # Admin accounts own no key, so the picker lists member keys (owner name only).
 # The cap keeps one response bounded; keys beyond it stay usable via the API.

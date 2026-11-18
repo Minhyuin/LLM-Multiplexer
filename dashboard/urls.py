@@ -1,9 +1,12 @@
 from django.urls import path
 
 from dashboard import views
+from fingerprints import board as fingerprint_board
 from fingerprints import views as fingerprint_views
 
 urlpatterns = [
+    path("fingerprints/board/", fingerprint_board.board, name="fingerprint-board"),
+    path("fingerprints/board/<uuid:run_id>/delete/", fingerprint_board.board_delete, name="fingerprint-board-delete"),
     path("fingerprints/state/", fingerprint_views.state, name="fingerprint-state"),
     path("fingerprints/start/", fingerprint_views.start, name="fingerprint-start"),
     path("fingerprints/<uuid:run_id>/", fingerprint_views.detail, name="fingerprint-detail"),
