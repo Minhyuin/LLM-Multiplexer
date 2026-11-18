@@ -128,7 +128,7 @@ class FingerprintBoardTests(TestCase):
 
         shown = response.context["rows"][0]["candidates"]
         self.assertEqual([row["model"] for row in shown], ["closest-model", "middle-model", "far-model"])
-        self.assertEqual([row["similarity"] for row in shown], ["94.0%", "72.0%", "31.0%"])
+        self.assertEqual([row["similarity"] for row in shown], ["0.94", "0.72", "0.31"])
         self.assertContains(response, "相似度最高的 3 个模型")
         self.assertNotContains(response, "候选参考模型")
 
@@ -142,6 +142,18 @@ class FingerprintBoardTests(TestCase):
 
         self.assertEqual(response.context["rows"][0]["candidates"][0]["similarity"], "—")
         self.assertNotContains(response, "0.0%")
+
+    def test_board_shows_a_ranking_score_above_one_verbatim(self):
+        # Real runs score above 1.0, so a percentage would print "321.8%".
+        member = self.make_user("highscore")
+        self.make_run(member, finished=timezone.now(),
+                      result={**RESULT, "candidates": [{"model": "glm-5.3-flash", "score": 3.218}]})
+        self.client.force_login(self.make_user("reader"))
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context["rows"][0]["candidates"][0]["similarity"], "3.218")
+        self.assertNotContains(response, "321.8%")
 
     # --- deletion ---------------------------------------------------------------
     def test_a_member_cannot_delete_a_result(self):

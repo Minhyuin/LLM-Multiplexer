@@ -37,10 +37,16 @@ def retention_hours():
 
 
 def _similarity(score):
-    # A missing score is reported as missing; never render it as 0%.
+    """Render the detector's ranking score the way the panel does.
+
+    The value is a ranking score, not a bounded ratio: real runs report numbers
+    well above 1. Showing it as a percentage would therefore claim things like
+    "321.8%"; the raw figure with the same precision as the panel is honest, and
+    a missing score stays missing instead of turning into 0.
+    """
     if not isinstance(score, (int, float)) or isinstance(score, bool):
         return "—"
-    return f"{score * 100:.1f}%"
+    return f"{score:.4f}".rstrip("0").rstrip(".")
 
 
 def _candidates(result):
