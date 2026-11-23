@@ -5,6 +5,12 @@
 {% block content %}
 <div class="card panel-card"><div class="card-body">
     <h3>为 {{ target_user.username }} 创建 API Key</h3>
+    {% if existing_count %}
+        <div class="alert alert-info">
+            该成员已有 {{ existing_count }} 把密钥。新建的启用密钥会同时写入 CPA；
+            每日额度用尽时，该成员名下所有启用密钥都会被一并停用。
+        </div>
+    {% endif %}
     <form method="post">
         {% csrf_token %}
         {{ form.as_p }}

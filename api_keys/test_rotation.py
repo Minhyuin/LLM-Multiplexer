@@ -135,6 +135,10 @@ class MemberSelfRotateTests(TestCase):
         other = User.objects.create_user("other-member")
         other_key = make_key(other, "sk-otherkeyOther")
         revoked = make_key(self.user, "sk-revokedZhangSan", status=APIKey.STATUS_REVOKED)
+        # Only one live key per member is allowed, so retire the fixture key
+        # before adding the blank one.
+        self.key.status = APIKey.STATUS_REVOKED
+        self.key.save(update_fields=["status"])
         blank = make_key(self.user, "sk-blankZhangSan")
         blank.token_plaintext = ""
         blank.save(update_fields=["token_plaintext"])
@@ -179,3 +183,46 @@ class MemberSelfRotateTests(TestCase):
         page = self.client.get(reverse("my-quota"))
         self.assertNotContains(page, "更换密钥")
         self.assertContains(page, "最近更新")
+
+
+class AdminCreateKeyTests(TestCase):
+    """A key created from the admin page must reach the proxy, or it is dead."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user("root-admin", password="pw", is_staff=True)
+        self.member = User.objects.create_user("ZhangSan", password="pw")
+        self.key = make_key(self.member, "sk-livekeyZhangSan")
+        self.client.force_login(self.admin)
+
+    def test_an_active_key_is_published_to_the_proxy(self):
+        with patch("api_keys.views.push_key_rotation_to_cliproxy") as push:
+            response = self.client.post(
+                reverse("admin-api-key-create", args=[self.member.id]),
+                {"name": "第二把", "status": APIKey.STATUS_ACTIVE, "note": ""},
+                follow=True,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(APIKey.objects.filter(user=self.member).count(), 2)
+        push.assert_called_once()
+        self.assertEqual(push.call_args[0][0], "")
+        self.assertTrue(push.call_args[0][1].startswith("labsk-"))
+        self.assertContains(response, "新密钥已写入 CPA")
+
+    def test_a_key_that_is_not_live_is_not_published(self):
+        with patch("api_keys.views.push_key_rotation_to_cliproxy") as push:
+            self.client.post(
+                reverse("admin-api-key-create", args=[self.member.id]),
+                {"name": "备用", "status": APIKey.STATUS_PENDING, "note": ""},
+            )
+        push.assert_not_called()
+        self.assertEqual(APIKey.objects.filter(user=self.member).count(), 2)
+
+    def test_a_failed_publish_is_reported_but_keeps_the_key(self):
+        with patch("api_keys.views.push_key_rotation_to_cliproxy", side_effect=RuntimeError("boom")):
+            response = self.client.post(
+                reverse("admin-api-key-create", args=[self.member.id]),
+                {"name": "第三把", "status": APIKey.STATUS_ACTIVE, "note": ""},
+                follow=True,
+            )
+        self.assertContains(response, "写入 CPA 失败")
+        self.assertEqual(APIKey.objects.filter(user=self.member).count(), 2)

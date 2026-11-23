@@ -10,11 +10,13 @@ from django.urls import reverse
 from django.utils import timezone
 
 from api_keys.models import APIKey
+from api_keys.rotation import RotationError, rotate_member_key
 from core.models import SiteSettings
 from quota import enforcement
 from quota.models import DailyQuotaUsage
 from quota.services import (
     default_daily_limit,
+    is_suspended,
     member_quota,
     resolve_limit,
     set_all_daily_quota,
@@ -342,3 +344,55 @@ class ApplyMarketPricesTests(TestCase):
 
         call_command("apply_market_prices", "--dry-run")
         self.assertFalse(ModelPricing.objects.exists())
+
+@override_settings(**MANAGEMENT)
+class SuspendedKeyGuardTests(TestCase):
+    """A suspended member must not be able to get a working key back."""
+
+    def setUp(self):
+        self.member = User.objects.create_user("blocked", password="pw")
+        self.key = make_key(self.member, token="labsk-blocked")
+        self.member.profile.daily_token_quota = 100
+        self.member.profile.save()
+        DailyQuotaUsage.objects.create(
+            user=self.member,
+            day=timezone.localdate(),
+            tokens_used=500,
+            limit=100,
+            api_key=self.key,
+            blocked_key="labsk-blocked",
+            blocked_at=timezone.now(),
+        )
+
+    def test_suspension_is_visible_to_callers(self):
+        self.assertTrue(is_suspended(self.member))
+
+    def test_member_cannot_rotate_while_suspended(self):
+        with patch("api_keys.rotation.push_key_rotation_to_cliproxy") as push:
+            with self.assertRaises(RotationError):
+                rotate_member_key(self.member, self.key.pk)
+        push.assert_not_called()
+        self.key.refresh_from_db()
+        self.assertEqual(self.key.token_plaintext, "labsk-blocked")
+
+    def test_restore_publishes_the_key_the_member_currently_holds(self):
+        # A portal-side rebind during the suspension replaces the row in place
+        # and is deliberately kept away from CPA; the restore must follow it.
+        metadata = APIKey.build_token_metadata("labsk-rebound")
+        self.key.token_plaintext = "labsk-rebound"
+        self.key.token_hash = metadata["token_hash"]
+        self.key.token_prefix = metadata["token_prefix"]
+        self.key.token_masked = metadata["token_masked"]
+        self.key.save()
+        self.member.profile.daily_token_quota = 10_000
+        self.member.profile.save()
+
+        with patch("quota.enforcement.requests.get") as get, patch(
+            "quota.enforcement.requests.patch"
+        ) as patch_call:
+            get.return_value = MagicMock(json=lambda: {"api-keys": []}, raise_for_status=lambda: None)
+            patch_call.return_value = MagicMock()
+            stats = enforcement.enforce_daily_quota()
+
+        self.assertEqual(stats["restored"], 1)
+        self.assertEqual(patch_call.call_args.kwargs["json"], {"old": "", "new": "labsk-rebound"})

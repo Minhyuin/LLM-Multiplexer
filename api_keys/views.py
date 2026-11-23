@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
@@ -7,10 +9,13 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from api_keys.cpa_sync import push_key_rotation_to_cliproxy
 from api_keys.forms import APIKeyAdminForm, APIKeyRequestForm, APIKeyReviewForm
 from api_keys.models import APIKey, APIKeyRequest
 from api_keys.rotation import RotationError, rotate_member_key, self_rotate_state
 from core.utils import admin_required, is_portal_admin
+
+logger = logging.getLogger(__name__)
 
 
 @login_required
@@ -80,12 +85,25 @@ def admin_api_key_create(request, user_id):
             key.token_masked = metadata["token_masked"]
             key.token_plaintext = raw_token
             key.save()
+            if key.status == APIKey.STATUS_ACTIVE:
+                # A key the proxy never learned about answers 401, which looks
+                # like a broken portal key — publish it right away.
+                try:
+                    push_key_rotation_to_cliproxy("", raw_token)
+                    messages.success(request, "新密钥已写入 CPA")
+                except Exception as exc:
+                    logger.error("CPA append failed for new key of %s: %s", target_user.username, exc)
+                    messages.warning(request, f"密钥已创建，但写入 CPA 失败，需要手动处理：{exc}")
             request.session["latest_plain_token"] = raw_token
             messages.success(request, f"已为 {target_user.username} 创建 API Key")
             return redirect("admin-api-key-list")
     else:
         form = APIKeyAdminForm(initial={"status": APIKey.STATUS_ACTIVE})
-    return render(request, "api_keys/admin_key_create.html", {"form": form, "target_user": target_user})
+    return render(
+        request,
+        "api_keys/admin_key_create.html",
+        {"form": form, "target_user": target_user, "existing_count": APIKey.objects.filter(user=target_user).count()},
+    )
 
 
 @admin_required

@@ -9,6 +9,7 @@ from api_keys.cpa_sync import push_key_rotation_to_cliproxy
 from api_keys.member_tokens import MEMBER_KEY_RANDOM_LENGTH, build_account_name, generate_member_key
 from api_keys.models import APIKey, APIKeyAlias
 from core.utils import is_portal_admin
+from quota.services import is_suspended
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,9 @@ def rotate_member_key(user, key_id: int) -> str:
             raise RotationError("当前密钥没有可同步的明文，请联系管理员")
         if cooldown_active(user):
             raise RotationError("10 分钟内只能更换一次密钥")
+        if is_suspended(user):
+            # Rotating would append a fresh key to the proxy and undo the cap.
+            raise RotationError("今日额度已用尽，密钥暂停使用中；次日 0 点自动恢复后才能更换密钥")
 
         account_name = account_name_for_user(user)
         new_token = unique_member_key(account_name)

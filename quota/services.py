@@ -102,6 +102,17 @@ def quota_state(user, day: date | None = None):
     return DailyQuotaUsage.objects.filter(user=user, day=day or timezone.localdate()).first()
 
 
+def is_suspended(user, day: date | None = None) -> bool:
+    """True while the member is over today's allowance and still cut off.
+
+    Anything that would put a working credential back into the proxy has to ask
+    this first, otherwise a member could rotate their own key and walk straight
+    past the cap.
+    """
+    state = quota_state(user, day)
+    return bool(state and state.is_blocked)
+
+
 def members_over_quota() -> int:
     """How many active members have already reached their cap today."""
     from django.contrib.auth import get_user_model

@@ -13,7 +13,7 @@ from api_keys.cpa_sync import push_key_rotation_to_cliproxy
 from api_keys.models import APIKey, APIKeyAlias
 from core.utils import admin_required
 from quota.models import DailyQuotaUsage, UserQuotaSnapshot
-from quota.services import default_daily_limit, resolve_limit, today_usage
+from quota.services import default_daily_limit, is_suspended, resolve_limit, today_usage
 from django.db.models import Sum
 from users.models import Profile
 
@@ -183,14 +183,23 @@ def admin_user_edit(request, user_id):
                 key.save()
             messages.success(request, "绑定密钥已更新")
             if new_plaintext != old_plaintext:
-                # Best-effort: the panel save must never fail because CPA is
-                # unreachable — surface the sync failure as a warning instead.
-                try:
-                    push_key_rotation_to_cliproxy(old_plaintext, new_plaintext)
-                    messages.success(request, "CPA 密钥已同步")
-                except Exception as exc:
-                    logger.error("CPA key sync failed for user %s: %s", target_user.username, exc)
-                    messages.warning(request, f"面板已保存，但同步 CPA 失败，需要手动处理：{exc}")
+                if is_suspended(target_user):
+                    # Keep the new key portal-side only: pushing it now would hand
+                    # a suspended member a working credential again. The daily
+                    # restore publishes whatever key is current at that point.
+                    messages.warning(
+                        request,
+                        "该成员今日已被限额，新密钥只保存在门户，额度恢复时才会写入 CPA",
+                    )
+                else:
+                    # Best-effort: the panel save must never fail because CPA is
+                    # unreachable — surface the sync failure as a warning instead.
+                    try:
+                        push_key_rotation_to_cliproxy(old_plaintext, new_plaintext)
+                        messages.success(request, "CPA 密钥已同步")
+                    except Exception as exc:
+                        logger.error("CPA key sync failed for user %s: %s", target_user.username, exc)
+                        messages.warning(request, f"面板已保存，但同步 CPA 失败，需要手动处理：{exc}")
             return redirect("admin-user-list")
         if "save_password" in request.POST and password_form.is_valid():
             target_user.set_password(password_form.cleaned_data["new_password"])

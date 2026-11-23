@@ -70,13 +70,23 @@ def append_proxy_key(key: str) -> None:
     resp.raise_for_status()
 
 
-def _member_key(user):
-    return (
+def _member_keys(user) -> list:
+    """Every live key the member holds.
+
+    A member can own more than one key (the admin pages allow it), and the proxy
+    list has no idea which of them belongs to whom — so the cap has to act on all
+    of them, otherwise the second key keeps serving requests.
+    """
+    return list(
         APIKey.objects.filter(user=user, status=APIKey.STATUS_ACTIVE)
         .exclude(token_plaintext="")
         .order_by("-created_at")
-        .first()
     )
+
+
+def _member_key(user):
+    keys = _member_keys(user)
+    return keys[0] if keys else None
 
 
 def _record_block(user, api_key, used: int, limit: int) -> None:
@@ -93,16 +103,22 @@ def _record_block(user, api_key, used: int, limit: int) -> None:
 
 
 def _restore(state, proxy_keys: list[str]) -> bool:
-    """Put the member's key back if it is missing. Returns True if it was re-added."""
-    key = state.blocked_key or ""
-    if not key:
-        user_key = _member_key(state.user)
-        key = user_key.token_plaintext if user_key else ""
+    """Put the member's live keys back if any are missing. True if one was added.
+
+    The keys restored are whatever the member currently holds, not necessarily
+    the one that was suspended: an admin may have rebound the key while the
+    member was blocked (that write is portal-only on purpose), so trusting the
+    stored plaintext would re-publish a credential the portal no longer hands out.
+    """
+    keys = [key.token_plaintext for key in _member_keys(state.user)]
+    if not keys and state.blocked_key:
+        keys = [state.blocked_key]
     added = False
-    if key and key in proxy_keys:
-        added = False
-    elif key:
+    for key in keys:
+        if key in proxy_keys:
+            continue
         append_proxy_key(key)
+        proxy_keys.append(key)
         added = True
     state.restored_at = timezone.now()
     state.save(update_fields=["restored_at", "updated_at"])
@@ -156,9 +172,11 @@ def enforce_daily_quota(now=None) -> dict:
 
     for user, api_key, used, limit in pending_block:
         try:
-            if api_key.token_plaintext in proxy_keys:
-                remove_proxy_key(api_key.token_plaintext)
-                proxy_keys = [k for k in proxy_keys if k != api_key.token_plaintext]
+            for key in _member_keys(user):
+                plaintext = key.token_plaintext
+                if plaintext and plaintext in proxy_keys:
+                    remove_proxy_key(plaintext)
+                    proxy_keys = [k for k in proxy_keys if k != plaintext]
             _record_block(user, api_key, used, limit)
             stats["blocked"] += 1
             logger.info("quota: blocked %s at %s/%s tokens", user.username, used, limit)
@@ -168,8 +186,7 @@ def enforce_daily_quota(now=None) -> dict:
 
     for state in pending_restore:
         try:
-            if _restore(state, proxy_keys):
-                proxy_keys.append(state.blocked_key)
+            _restore(state, proxy_keys)
             stats["restored"] += 1
             logger.info("quota: restored %s", state.user.username)
         except Exception as exc:
