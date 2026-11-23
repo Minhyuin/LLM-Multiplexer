@@ -10,6 +10,7 @@ from api_keys.rotation import self_rotate_state
 from core.site_settings import public_api_v1_url
 from quota.activity import personal_activity
 from quota.models import UserQuotaSnapshot
+from quota.services import member_quota, month_usage
 from usage.models import UsageLog
 from users.models import RegistrationProvision
 
@@ -63,6 +64,8 @@ def my_quota(request):
 
     return render(request, "quota/my_quota.html", {
         "activity": personal_activity(request.user),
+        "daily_quota": member_quota(request.user),
+        "month_usage": month_usage(request.user.id),
         "snapshot": snapshot,
         "snapshots": snapshots,
         "bound_keys": bound_keys,

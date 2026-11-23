@@ -12,7 +12,8 @@ import logging
 from api_keys.cpa_sync import push_key_rotation_to_cliproxy
 from api_keys.models import APIKey, APIKeyAlias
 from core.utils import admin_required
-from quota.models import UserQuotaSnapshot
+from quota.models import DailyQuotaUsage, UserQuotaSnapshot
+from quota.services import default_daily_limit, resolve_limit, today_usage
 from django.db.models import Sum
 from users.models import Profile
 
@@ -71,15 +72,70 @@ def admin_user_list(request):
         .annotate(total_tokens=Sum("usage_logs__total_tokens"))
         .values("usage_logs__user", "total_tokens")
     }
+    usage_today = today_usage()
+    blocked_ids = set(
+        DailyQuotaUsage.objects.filter(
+            day=timezone.localdate(), blocked_at__isnull=False, restored_at__isnull=True
+        ).values_list("user_id", flat=True)
+    )
+    quota_rows = {}
+    for user in users:
+        profile = getattr(user, "profile", None)
+        own = getattr(profile, "daily_token_quota", None)
+        limit = resolve_limit(profile)
+        used = usage_today.get(user.id, 0)
+        quota_rows[user.id] = {
+            "limit": limit,
+            "used": used,
+            "own": own,
+            "inherit": own is None,
+            "million": "" if own is None else round(own / 1_000_000, 3),
+            "default_million": round(default_daily_limit() / 1_000_000, 3),
+            "over": bool(limit) and used >= limit,
+            "blocked": user.id in blocked_ids,
+        }
     return render(request, "users/admin_user_list.html", {
         "users": users,
         "monthly_usage": monthly_usage,
+        "quota_rows": quota_rows,
         "group_filter": group_filter,
         "grade_filter": grade_filter,
         "status_filter": status_filter,
         "all_groups": all_groups,
         "all_grades": all_grades,
     })
+
+
+@admin_required
+@require_POST
+def admin_user_quota(request, user_id):
+    """Set (or clear) one member's daily cap from the member list."""
+    target_user = get_object_or_404(User.objects.select_related("profile"), pk=user_id)
+    profile = target_user.profile
+    raw = (request.POST.get(f"quota_{user_id}") or "").strip()
+    label = profile.display_name or target_user.username
+
+    if raw == "":
+        profile.daily_token_quota = None
+        profile.save(update_fields=["daily_token_quota", "updated_at"])
+        messages.success(
+            request,
+            f"{label} 的每日额度已改为跟随站点默认值（{round(default_daily_limit() / 1_000_000, 3)}M）。",
+        )
+        return redirect("admin-user-list")
+
+    try:
+        millions = float(raw)
+    except (TypeError, ValueError):
+        millions = -1
+    if millions < 0:
+        messages.error(request, "额度必须是大于等于 0 的数字（单位：M token）；留空表示跟随站点默认值。")
+        return redirect("admin-user-list")
+
+    profile.daily_token_quota = int(round(millions * 1_000_000))
+    profile.save(update_fields=["daily_token_quota", "updated_at"])
+    messages.success(request, f"{label} 的每日额度已设为 {millions:g}M token。")
+    return redirect("admin-user-list")
 
 
 @admin_required

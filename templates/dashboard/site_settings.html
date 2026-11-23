@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load ui_tags %}
 
 {% block title %}站点设置{% endblock %}
 
@@ -71,6 +72,30 @@
                     </div>
                 </div>
 
+                <h5 class="section-title">每日 Token 额度</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
+                        <label for="{{ form.daily_quota_m.id_for_label }}" class="form-label fw-semibold">{{ form.daily_quota_m.label }}</label>
+                        {{ form.daily_quota_m }}
+                        {% if form.daily_quota_m.help_text %}<div class="form-text">{{ form.daily_quota_m.help_text }}</div>{% endif %}
+                        {% for error in form.daily_quota_m.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="col-md-6">
+                        <label for="{{ form.quota_enforcement.id_for_label }}" class="form-label fw-semibold">{{ form.quota_enforcement.label }}</label>
+                        {{ form.quota_enforcement }}
+                        {% if form.quota_enforcement.help_text %}<div class="form-text">{{ form.quota_enforcement.help_text }}</div>{% endif %}
+                        {% for error in form.quota_enforcement.errors %}<div class="text-danger small mt-1" role="alert">{{ error }}</div>{% endfor %}
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            {{ form.apply_to_all }}
+                            <label class="form-check-label" for="{{ form.apply_to_all.id_for_label }}">{{ form.apply_to_all.label }}</label>
+                            {% if form.apply_to_all.help_text %}<div class="form-text">{{ form.apply_to_all.help_text }}</div>{% endif %}
+                        </div>
+                    </div>
+                </div>
+                <p class="small text-muted mb-4">计量口径为 total tokens（输入 + 输出）。超额且模式为“停用密钥”时，同步任务会把该成员的密钥从内核移出，等额度恢复（次日 0 点或调高额度）后自动放回。</p>
+
                 <h5 class="section-title">用户分组类型</h5>
                 <div class="mb-4">
                     <label for="{{ form.lab_groups.id_for_label }}" class="form-label fw-semibold">{{ form.lab_groups.label }}</label>
@@ -96,6 +121,12 @@
                 <dd class="col-6">{{ effective_query_trace_enabled|yesno:"开启,关闭" }}</dd>
                 <dt class="col-6">指纹检测</dt>
                 <dd class="col-6">{{ effective_fingerprint_enabled|yesno:"开启,关闭" }}</dd>
+                <dt class="col-6">每日额度（默认）</dt>
+                <dd class="col-6">{{ effective_daily_quota|token_unit }}</dd>
+                <dt class="col-6">超额处理</dt>
+                <dd class="col-6">{{ effective_quota_enforcement }}</dd>
+                <dt class="col-6">今日超额人数</dt>
+                <dd class="col-6"><a href="/users/admin/list/">{{ members_over_quota }} 人</a></dd>
                 <dt class="col-6">每日次数（成员）</dt>
                 <dd class="col-6">{{ effective_fingerprint_daily_limit }}</dd>
                 <dt class="col-6">每日次数（管理员）</dt>

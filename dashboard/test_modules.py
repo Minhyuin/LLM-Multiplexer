@@ -88,7 +88,7 @@ class DashboardModuleTests(TestCase):
         UsageLog.objects.create(request_id="cost-trailing", user=self.user, model_name="alpha",
                                 total_tokens=1, estimated_cost=Decimal("4.354000"), request_time=timezone.now())
         html = self.module("summary", range="all").json()["html"]
-        self.assertIn("$4.354<", html)
+        self.assertIn("￥4.354<", html)
         self.assertNotIn("4.3540", html)
 
     def test_summary_cost_has_no_float_tail(self):
@@ -96,7 +96,7 @@ class DashboardModuleTests(TestCase):
             UsageLog.objects.create(request_id=f"cost-{index}", user=self.user, model_name="alpha",
                                     total_tokens=1, estimated_cost=Decimal("0.1"), request_time=timezone.now())
         html = self.module("summary", range="all").json()["html"]
-        self.assertIn("$0.3<", html)
+        self.assertIn("￥0.3<", html)
         self.assertNotIn("30000000000000004", html)
 
     def test_modules_are_read_only(self):

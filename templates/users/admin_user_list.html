@@ -75,6 +75,8 @@
                 <th>身份</th>
                 <th>状态</th>
                 <th>月消耗</th>
+                <th>今日 / 每日额度</th>
+                <th style="min-width:160px;">设定额度（M）</th>
                 <th class="text-end">操作</th>
             </tr></thead>
             <tbody>
@@ -94,6 +96,29 @@
                         {% endif %}
                     </td>
                     <td>{{ monthly_usage|get_item:item.id|default:'0'|token_unit }}</td>
+                    {% with q=quota_rows|get_item:item.id %}
+                    <td>
+                        <span class="{% if q.over %}text-danger fw-semibold{% endif %}">{{ q.used|token_unit }}</span>
+                        <span class="text-muted">/ {{ q.limit|token_unit }}</span>
+                        {% if q.blocked %}
+                            <span class="badge text-bg-danger ms-1" title="今日超额，密钥已从内核移除">已断</span>
+                        {% elif q.over %}
+                            <span class="badge text-bg-warning text-dark ms-1">超额</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="d-flex gap-1 align-items-center">
+                            <input type="number" step="0.001" min="0" class="form-control form-control-sm" style="width:92px;"
+                                   name="quota_{{ item.id }}" value="{{ q.million }}"
+                                   placeholder="{{ q.default_million }}"
+                                   title="单位 M token（200 表示 2 亿）；留空表示跟随站点默认值 {{ q.default_million }}M">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary rounded-pill px-2"
+                                    formaction="/users/admin/{{ item.id }}/quota/" formmethod="post"
+                                    onclick="return confirm('确认修改 {{ item.profile.display_name|default:item.username }} 的每日额度？')">保存</button>
+                        </div>
+                        {% if q.inherit %}<div class="text-muted" style="font-size:.72rem;">跟随默认 {{ q.default_million }}M</div>{% endif %}
+                    </td>
+                    {% endwith %}
                     <td class="text-end">
                         <div class="d-inline-flex gap-1">
                             {% if item.id != user.id and item.is_active %}

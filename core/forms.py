@@ -115,6 +115,31 @@ class DiscussionPostForm(AttachmentUploadMixin, PortalForm):
 
 
 class SiteSettingsForm(PortalForm):
+    daily_quota_m = forms.IntegerField(
+        label="成员每日 Token 额度（M）",
+        min_value=1,
+        max_value=1_000_000,
+        required=False,
+        help_text="单位百万 token：200 表示每人每天 2 亿。勾选下面的“应用到所有成员”会把该值写入每个人的额度。",
+        widget=forms.NumberInput(attrs={"class": "form-control", "step": "1"}),
+    )
+    quota_enforcement = forms.ChoiceField(
+        label="超额处理",
+        choices=[
+            ("block", "停用该成员密钥（超额即断）"),
+            ("warn", "仅提示不阻断"),
+            ("off", "关闭额度检查"),
+        ],
+        required=False,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    apply_to_all = forms.BooleanField(
+        label="应用到所有成员",
+        required=False,
+        initial=False,
+        help_text="勾选后，本次保存会把额度写到每个成员的档案里，覆盖他们当前的个人额度。",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
     query_trace_enabled = forms.TypedChoiceField(
         label="Query 追溯",
         choices=(("", "跟随环境变量"), ("1", "开启"), ("0", "关闭")),
@@ -178,6 +203,21 @@ class SiteSettingsForm(PortalForm):
             value = getattr(self.instance, name, None)
             self.fields[name].initial = "" if value is None else ("1" if value else "0")
             self.fields[name].widget.attrs["class"] = "form-select"
+        tokens = int(getattr(self.instance, "daily_token_quota_default", 0) or 0)
+        self.fields["daily_quota_m"].initial = max(tokens // 1_000_000, 1)
+
+    def clean_daily_quota_m(self):
+        """Absent means "leave the stored value alone"; blank means an error."""
+        value = self.cleaned_data.get("daily_quota_m")
+        if value is None and "daily_quota_m" in self.data:
+            raise forms.ValidationError("请填写每日额度（单位 M token），例如 200。")
+        return value
+
+    def clean_quota_enforcement(self):
+        value = self.cleaned_data.get("quota_enforcement")
+        if not value and "quota_enforcement" in self.data:
+            raise forms.ValidationError("请选择超额处理方式。")
+        return value or ""
 
     def clean_query_trace_enabled(self):
         value = self.cleaned_data.get("query_trace_enabled")

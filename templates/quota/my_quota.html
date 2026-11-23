@@ -31,6 +31,36 @@
 
 {% include 'quota/activity.html' %}
 
+<div class="card panel-card mb-4" id="daily-quota">
+    <div class="card-body p-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <h5 class="section-title mb-0">今日额度</h5>
+            <span class="text-muted small">计量口径 total tokens（输入 + 输出）· 每日 0 点重置</span>
+        </div>
+        <div class="d-flex flex-wrap align-items-baseline gap-2">
+            <span class="fs-4 fw-semibold">{{ daily_quota.used|token_unit }}</span>
+            <span class="text-muted">/ {{ daily_quota.limit|token_unit }}</span>
+            <span class="ms-auto small text-muted">剩余 {{ daily_quota.remaining|token_unit }}</span>
+        </div>
+        <div class="progress my-2" style="height:8px;" role="progressbar" aria-valuenow="{{ daily_quota.percent|floatformat:0 }}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar {% if daily_quota.over %}bg-danger{% elif daily_quota.percent >= 80 %}bg-warning{% else %}bg-primary{% endif %}"
+                 style="width:{% if daily_quota.percent > 100 %}100{% else %}{{ daily_quota.percent|floatformat:1 }}{% endif %}%"></div>
+        </div>
+        {% if daily_quota.blocked %}
+            <div class="alert alert-danger mb-0 mt-2 py-2 small">
+                今日额度已用尽，你的 API Key 已被暂时停用；额度恢复（次日 0 点或管理员调高额度）后会自动恢复，无需操作。
+            </div>
+        {% elif daily_quota.over %}
+            <div class="alert alert-warning mb-0 mt-2 py-2 small">
+                今日额度已用尽。当前为“仅提示”模式，请求仍可继续，但请留意用量。
+            </div>
+        {% elif daily_quota.percent >= 80 %}
+            <div class="alert alert-warning mb-0 mt-2 py-2 small">今日额度已使用 {{ daily_quota.percent|floatformat:0 }}%，接近上限。</div>
+        {% endif %}
+        <p class="small text-muted mb-0 mt-2">本月累计 {{ month_usage.tokens|token_unit }} · {{ month_usage.requests }} 次请求。额度不够请联系管理员调整。</p>
+    </div>
+</div>
+
 <div class="row g-3 mb-4">
     <div class="col-md-3 col-6">
         <div class="card panel-card stat-card stat-card-primary"><div class="card-body">
@@ -47,7 +77,7 @@
     <div class="col-md-3 col-6">
         <div class="card panel-card stat-card stat-card-violet"><div class="card-body">
             <div class="label">💵 费用</div>
-            <div class="value">${{ usage_stats.total_cost|default:'0'|at_most:4 }}</div>
+            <div class="value">￥{{ usage_stats.total_cost|default:'0'|at_most:4 }}</div>
         </div></div>
     </div>
     <div class="col-md-3 col-6">
@@ -102,13 +132,13 @@
                     <div class="col-6">
                         <div class="personal-summary-item">
                             <span>费用已用</span>
-                            <strong>${{ snapshot.cost_used|at_most:4 }}</strong>
+                            <strong>￥{{ snapshot.cost_used|at_most:4 }}</strong>
                         </div>
                     </div>
                     <div class="col-6">
                         <div class="personal-summary-item">
                             <span>费用上限</span>
-                            <strong>${{ snapshot.cost_limit|at_most:4 }}</strong>
+                            <strong>￥{{ snapshot.cost_limit|at_most:4 }}</strong>
                         </div>
                     </div>
                 </div>
@@ -127,7 +157,7 @@
                         <tr>
                             <td>{{ item.year }}-{{ item.month|stringformat:'02d' }}</td>
                             <td>{{ item.token_used|token_unit }} / {{ item.token_limit|token_unit }}</td>
-                            <td>${{ item.cost_used|at_most:4 }} / ${{ item.cost_limit|at_most:4 }}</td>
+                            <td>￥{{ item.cost_used|at_most:4 }} / ￥{{ item.cost_limit|at_most:4 }}</td>
                         </tr>
                     {% endfor %}
                     </tbody>

@@ -56,10 +56,25 @@ CLIPROXY_SYNC_SOURCE_NAMES = [
 
 
 def get_model_pricing(model_name):
-    pricing = ModelPricing.objects.filter(model_name=model_name).first()
-    if pricing:
-        return pricing.prompt_price_per_million, pricing.completion_price_per_million, pricing.cached_price_per_million
-    return DEFAULT_MODEL_PRICING.get(model_name, (Decimal("0"), Decimal("0"), Decimal("0")))
+    """Resolve rates, tolerating the provider prefix the gateway adds to model ids.
+
+    Usage rows carry names such as ``deepseek/deepseek-v4.1-flash`` while the
+    price table is keyed by ``deepseek-v4.1-flash``; without the fallback those
+    rows would silently cost 0.
+    """
+    name = str(model_name or "").strip()
+    candidates = [name]
+    if "/" in name:
+        candidates.append(name.rsplit("/", 1)[-1])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        pricing = ModelPricing.objects.filter(model_name=candidate).first()
+        if pricing:
+            return pricing.prompt_price_per_million, pricing.completion_price_per_million, pricing.cached_price_per_million
+        if candidate in DEFAULT_MODEL_PRICING:
+            return DEFAULT_MODEL_PRICING[candidate]
+    return Decimal("0"), Decimal("0"), Decimal("0")
 
 
 def calculate_estimated_cost(model_name, prompt_tokens, completion_tokens, raw_payload=None):

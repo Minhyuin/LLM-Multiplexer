@@ -497,3 +497,62 @@ python manage.py runserver 0.0.0.0:8002
 ## 14. 一句话结论
 
 把 [`pioneer-portal`](../pioneer-portal/README.md) 移植到远端后，**重点修改的是门户的环境变量、数据库配置和 CLIProxy 管理接口地址；远端 [`cli-proxy-api`](../cliproxyapi/cli-proxy-api) 通常不需要改代码，只需要确认它的管理接口确实可用。**
+
+---
+
+## 15. 每日 Token 额度与模型价格
+
+### 15.1 额度从哪来
+
+每位成员的每日额度按下面的顺序解析，先命中先用：
+
+1. `users.Profile.daily_token_quota`（管理员在“成员列表”里单独设定，单位 token）；
+2. 留空时用 `core.SiteSettings.daily_token_quota_default`（“站点设置 → 每日 Token 额度”，单位 M token，默认 200）；
+3. 两者都取不到时回落 `quota.services.DEFAULT_DAILY_TOKENS`（200,000,000）。
+
+计量口径是 `UsageLog.total_tokens`（prompt + completion），按 `Asia/Shanghai` 的自然日切分，只统计 `user` 非空的记录。
+
+### 15.2 超额之后
+
+`core.SiteSettings.quota_enforcement` 有三档：
+
+- `block`（默认）：把该成员在门户里登记的那把密钥从内核 `api-keys` 里摘掉，成员随即收到 401；次日本地时间 00:00 用量归零后自动加回。
+- `warn`：只在页面上标红，不阻断。
+- `off`：完全不检查。
+
+管理员同样受额度约束，但可以随时在门户里把自己的额度调高，不会把自己锁死。
+
+### 15.3 检查节奏与代价
+
+检查挂在既有的用量同步命令里，每 30 秒一次：
+
+```bash
+/srv/pioneer-portal/.venv/bin/python manage.py sync_cliproxy_usage   # 需要跳过额度检查时加 --skip-quota
+```
+
+一次检查是一条走索引的聚合查询（生产实测 0.2 ms，Django 封装约 3 ms），只有状态发生翻转时才会调用内核管理接口：
+
+- `GET /v0/management/api-keys`
+- `DELETE /v0/management/api-keys?value=<key>`（摘掉）
+- `PATCH /v0/management/api-keys` with `{"old": "", "new": "<key>"}`（加回；`old` 不存在时是追加语义）
+
+绝不使用 `PUT` 整表覆盖，避免并发下清空别人的密钥。
+
+### 15.4 模型价格
+
+价格存在 `dashboard.ModelPricing`，单位是“元 / 百万 token”，三档分别是输入、输出、缓存命中。改名后的渠道前缀（如 `deepseek/deepseek-v4.1-flash`）会回退到裸模型名查价。
+
+一键改成市价（美元 × 7.1 汇率）：
+
+```bash
+/srv/pioneer-portal/.venv/bin/python manage.py apply_market_prices --dry-run   # 先看
+/srv/pioneer-portal/.venv/bin/python manage.py apply_market_prices             # 再写
+```
+
+### 15.5 上线注意
+
+本版新增三个迁移（`users.0008`、`core.0006`、`quota.0002`）。发布脚本设置了 `ALLOW_AUTO_MIGRATE=0`，切换 tag 之后必须手工执行：
+
+```bash
+/srv/pioneer-portal/.venv/bin/python manage.py migrate
+```

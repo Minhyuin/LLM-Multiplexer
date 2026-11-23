@@ -175,6 +175,23 @@ class SiteSettings(models.Model):
         default="",
         help_text="每行一个分组名称，最多 20 个；留空时使用内置的 电控/算法/机械/宣传。",
     )
+    daily_token_quota_default = models.PositiveBigIntegerField(
+        "成员每日 Token 额度",
+        default=200_000_000,
+        validators=[MinValueValidator(0)],
+        help_text="单位 token（200000000 = 200M）。统一设定时会覆盖所有成员的额度。",
+    )
+    quota_enforcement = models.CharField(
+        "每日额度超额处理",
+        max_length=8,
+        choices=[
+            ("block", "停用该成员密钥"),
+            ("warn", "仅提示不阻断"),
+            ("off", "关闭额度检查"),
+        ],
+        default="block",
+        help_text="停用密钥后在内核侧拒绝请求，次日 0 点或调高额度后自动恢复。",
+    )
     updated_at = models.DateTimeField("更新时间", auto_now=True)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

@@ -24,6 +24,13 @@ from core.site_settings import (
 from core.utils import admin_required
 from fingerprints.config import enabled as fingerprint_enabled
 from fingerprints.config import limit as fingerprint_limit
+from quota.services import (
+    default_daily_limit,
+    enforcement_mode,
+    members_over_quota,
+    set_all_daily_quota,
+    today_usage,
+)
 from dashboard.forms import ModelPricingForm
 from dashboard.model_catalog import collect_available_models
 from dashboard.models import ModelPricing
@@ -339,7 +346,18 @@ def site_settings(request):
     if request.method == "POST" and form.is_valid():
         obj = form.save(commit=False)
         obj.updated_by = request.user
+        quota_m = form.cleaned_data.get("daily_quota_m")
+        if quota_m:
+            tokens = int(quota_m) * 1_000_000
+            obj.daily_token_quota_default = tokens
+            if form.cleaned_data.get("apply_to_all"):
+                updated = set_all_daily_quota(tokens)
+                messages.success(request, f"已把每日额度 {quota_m}M 应用到全部 {updated} 位成员。")
+        if form.cleaned_data.get("quota_enforcement"):
+            obj.quota_enforcement = form.cleaned_data["quota_enforcement"]
         obj.save()
+        if not quota_m:
+            messages.info(request, "本次未提交每日额度，已保留原有数值。")
         normalize_orphan_lab_groups()
         messages.success(request, "站点设置已保存。")
         return redirect("admin-site-settings")
@@ -358,6 +376,9 @@ def site_settings(request):
             "effective_fingerprint_admin_daily_limit": fingerprint_limit("ADMIN_DAILY_LIMIT", 20),
             "effective_fingerprint_cooldown_seconds": fingerprint_limit("COOLDOWN_SECONDS", 60),
             "effective_fingerprint_concurrency": fingerprint_limit("CONCURRENCY", 2),
+            "effective_daily_quota": default_daily_limit(),
+            "effective_quota_enforcement": enforcement_mode(),
+            "members_over_quota": members_over_quota(),
         },
     )
 

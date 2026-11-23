@@ -54,6 +54,12 @@ class Profile(models.Model):
     is_dashboard_visible = models.BooleanField(default=True)
     monthly_token_quota = models.PositiveBigIntegerField(default=0)
     monthly_cost_quota = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    daily_token_quota = models.PositiveBigIntegerField(
+        "每日 Token 额度",
+        null=True,
+        blank=True,
+        help_text="单位 token；留空时使用站点设置里的成员默认额度。",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
