@@ -330,6 +330,8 @@ def model_pricing_admin(request):
                     "prompt_price_per_million": form.cleaned_data["prompt_price_per_million"],
                     "completion_price_per_million": form.cleaned_data["completion_price_per_million"],
                     "cached_price_per_million": form.cleaned_data["cached_price_per_million"],
+                    "cache_write_price_per_million": form.cleaned_data["cache_write_price_per_million"],
+                    "cache_write_1h_price_per_million": form.cleaned_data["cache_write_1h_price_per_million"],
                 },
             )
             form = ModelPricingForm()

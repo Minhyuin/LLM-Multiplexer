@@ -36,6 +36,14 @@
                         <label class="form-label fw-semibold">缓存价格 <small class="text-muted">(￥/1M tokens)</small></label>
                         {{ form.cached_price_per_million }}
                     </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold">缓存写入 <small class="text-muted">(￥/1M tokens)</small></label>
+                        {{ form.cache_write_price_per_million }}
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold">长缓存写入 <small class="text-muted">(￥/1M tokens，Claude 1h / GPT 12h)</small></label>
+                        {{ form.cache_write_1h_price_per_million }}
+                    </div>
                 </div>
                 <button class="btn btn-primary rounded-pill px-4 w-100" type="submit">
                     <i class="bi bi-check-circle me-1"></i>保存定价
@@ -52,7 +60,8 @@
                         <th>模型</th>
                         <th class="text-end">输入 (￥/1M)</th>
                         <th class="text-end">输出 (￥/1M)</th>
-                        <th class="text-end">缓存 (￥/1M)</th>
+                        <th class="text-end">缓存读 (￥/1M)</th>
+                        <th class="text-end">缓存写 (￥/1M)</th>
                     </tr></thead>
                     <tbody>
                     {% for item in pricings %}
@@ -61,9 +70,13 @@
                             <td class="text-end">￥{{ item.prompt_price_per_million|floatformat:2 }}</td>
                             <td class="text-end">￥{{ item.completion_price_per_million|floatformat:2 }}</td>
                             <td class="text-end">￥{{ item.cached_price_per_million|floatformat:3 }}</td>
+                            <td class="text-end">
+                                ￥{{ item.cache_write_price_per_million|floatformat:3 }}
+                                {% if item.cache_write_1h_price_per_million %}<small class="text-muted">/ ￥{{ item.cache_write_1h_price_per_million|floatformat:3 }}</small>{% endif %}
+                            </td>
                         </tr>
                     {% empty %}
-                        <tr><td colspan="4" class="text-center text-muted py-4">暂无模型价格配置</td></tr>
+                        <tr><td colspan="5" class="text-center text-muted py-4">暂无模型价格配置</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>

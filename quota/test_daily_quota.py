@@ -337,7 +337,10 @@ class ApplyMarketPricesTests(TestCase):
         row = ModelPricing.objects.get(model_name="claude-opus-5-5")
         self.assertEqual(row.prompt_price_per_million, Decimal("28.400000"))
         self.assertEqual(row.completion_price_per_million, Decimal("142.000000"))
-        self.assertEqual(row.cached_price_per_million, Decimal("1.420000"))
+        # Cache read is 10% of input; the 5m write is 1.25x and the 1h write 2x.
+        self.assertEqual(row.cached_price_per_million, Decimal("2.840000"))
+        self.assertEqual(row.cache_write_price_per_million, Decimal("35.500000"))
+        self.assertEqual(row.cache_write_1h_price_per_million, Decimal("56.800000"))
         self.assertEqual(ModelPricing.objects.filter(model_name="deepseek-v4.1-flash").count(), 1)
 
     def test_vendors_that_quote_in_cny_are_not_converted(self):

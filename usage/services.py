@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
+from typing import NamedTuple
 from urllib.parse import urljoin
 
 import requests
@@ -55,7 +56,40 @@ CLIPROXY_SYNC_SOURCE_NAMES = [
 ]
 
 
-def get_model_pricing(model_name):
+class ModelRates(NamedTuple):
+    """Every rate needed to bill one request, in ￥ per million tokens."""
+
+    prompt: Decimal
+    completion: Decimal
+    cached: Decimal
+    cache_write: Decimal
+    cache_write_1h: Decimal
+
+
+def _bare_model_name(model_name):
+    name = str(model_name or "").strip()
+    return name.rsplit("/", 1)[-1] if "/" in name else name
+
+
+def build_rate_table():
+    """Load the whole price table once, keyed by bare model name.
+
+    Commands that recalculate thousands of rows must not hit the database (or the
+    ORM layer at all) once per row.
+    """
+    table = {}
+    for row in ModelPricing.objects.all():
+        table[row.model_name] = ModelRates(
+            prompt=row.prompt_price_per_million,
+            completion=row.completion_price_per_million,
+            cached=row.cached_price_per_million,
+            cache_write=row.cache_write_price_per_million,
+            cache_write_1h=row.cache_write_1h_price_per_million,
+        )
+    return table
+
+
+def resolve_rates(model_name, table=None):
     """Resolve rates, tolerating the provider prefix the gateway adds to model ids.
 
     Usage rows carry names such as ``deepseek/deepseek-v4.1-flash`` while the
@@ -64,28 +98,129 @@ def get_model_pricing(model_name):
     """
     name = str(model_name or "").strip()
     candidates = [name]
-    if "/" in name:
-        candidates.append(name.rsplit("/", 1)[-1])
+    bare = _bare_model_name(name)
+    if bare != name:
+        candidates.append(bare)
     for candidate in candidates:
         if not candidate:
             continue
-        pricing = ModelPricing.objects.filter(model_name=candidate).first()
-        if pricing:
-            return pricing.prompt_price_per_million, pricing.completion_price_per_million, pricing.cached_price_per_million
+        if table is not None:
+            rates = table.get(candidate)
+            if rates:
+                return rates
+        else:
+            pricing = ModelPricing.objects.filter(model_name=candidate).first()
+            if pricing:
+                return ModelRates(
+                    prompt=pricing.prompt_price_per_million,
+                    completion=pricing.completion_price_per_million,
+                    cached=pricing.cached_price_per_million,
+                    cache_write=pricing.cache_write_price_per_million,
+                    cache_write_1h=pricing.cache_write_1h_price_per_million,
+                )
         if candidate in DEFAULT_MODEL_PRICING:
-            return DEFAULT_MODEL_PRICING[candidate]
-    return Decimal("0"), Decimal("0"), Decimal("0")
+            prompt, completion, cached = DEFAULT_MODEL_PRICING[candidate]
+            return ModelRates(prompt, completion, cached, Decimal("0"), Decimal("0"))
+    return ModelRates(*(Decimal("0"),) * 5)
 
 
-def calculate_estimated_cost(model_name, prompt_tokens, completion_tokens, raw_payload=None):
-    prompt_rate, completion_rate, cached_rate = get_model_pricing(model_name)
+def get_model_pricing(model_name, table=None):
+    """Backwards-compatible three-rate view of :func:`resolve_rates`."""
+    rates = resolve_rates(model_name, table=table)
+    return rates.prompt, rates.completion, rates.cached
+
+
+def is_anthropic_model(model_name):
+    """Anthropic bills input differently from every other provider we proxy.
+
+    Its ``prompt_tokens`` carries only the uncached part, its cache writes are
+    billed separately (1.25x input for the 5-minute TTL, 2x for the 1-hour TTL),
+    and its ``total_tokens`` is the sum of prompt + completion + cached instead of
+    the inclusive count the OpenAI-compatible providers report.
+    """
+    return _bare_model_name(model_name).lower().startswith("claude")
+
+
+def _as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def rate_for_cache_write(rates, model_name):
+    """Resolve the 5-minute cache-write rate, deriving it for Anthropic rows.
+
+    Anthropic's 1.25x/2x multipliers are a vendor rule rather than something an
+    operator should have to type, so a hand-entered Claude row still bills cache
+    writes correctly. Other vendors bill writes at face value (Moonshot at the
+    input rate, OpenAI for free), which the table states explicitly.
+    """
+    if rates.cache_write:
+        return rates.cache_write
+    if is_anthropic_model(model_name):
+        return rates.prompt * Decimal("1.25")
+    return Decimal("0")
+
+
+def rate_for_cache_write_1h(rates, model_name):
+    if rates.cache_write_1h:
+        return rates.cache_write_1h
+    if is_anthropic_model(model_name):
+        return rates.prompt * Decimal("2")
+    return Decimal("0")
+
+
+def calculate_estimated_cost(model_name, prompt_tokens, completion_tokens, raw_payload=None, rates=None):
+    """Price one request from the gateway's token breakdown.
+
+    The breakdown is the only trustworthy source: the ``cached_tokens`` column
+    mixes cache reads and cache writes for Anthropic (and is usually larger than
+    ``prompt_tokens`` there), so subtracting it from the prompt billed every new
+    input token at zero. Rows written before the gateway emitted a breakdown fall
+    back to the old subtraction.
+    """
+    if rates is None:
+        rates = resolve_rates(model_name)
     raw_payload = raw_payload or {}
-    cached_tokens = int(((raw_payload.get("tokens") or {}).get("cached_tokens") or raw_payload.get("cached_tokens") or 0))
-    normal_prompt_tokens = max(int(prompt_tokens) - cached_tokens, 0)
+    breakdown = raw_payload.get("token_breakdown") or {}
+    breakdown_input = breakdown.get("input") or {}
+    breakdown_output = breakdown.get("output") or {}
+
+    if breakdown_input:
+        uncached_tokens = _as_int(breakdown_input.get("uncached_tokens"))
+        cache_read_tokens = _as_int(breakdown_input.get("cache_read_tokens"))
+        cache_write_tokens = _as_int(breakdown_input.get("cache_write_tokens"))
+        output_tokens = _as_int(breakdown_output.get("total_tokens")) or int(completion_tokens)
+    else:
+        tokens = raw_payload.get("tokens") or {}
+        cached_tokens = _as_int(tokens.get("cached_tokens") or raw_payload.get("cached_tokens"))
+        cache_write_tokens = _as_int(tokens.get("cache_creation_tokens") or raw_payload.get("cache_creation_tokens"))
+        if is_anthropic_model(model_name):
+            # Anthropic's prompt count already excludes everything it cached.
+            uncached_tokens = int(prompt_tokens)
+            cache_read_tokens = _as_int(tokens.get("cache_read_tokens")) or cached_tokens
+        else:
+            # Every other provider reports an inclusive prompt count.
+            uncached_tokens = max(int(prompt_tokens) - cached_tokens - cache_write_tokens, 0)
+            cache_read_tokens = cached_tokens
+        output_tokens = int(completion_tokens)
+
+    write_cost = Decimal("0")
+    if cache_write_tokens:
+        by_ttl = ((raw_payload.get("cache_details") or {}).get("by_ttl") or {})
+        cached_1h = min(_as_int(by_ttl.get("1h")), cache_write_tokens)
+        cached_5m = cache_write_tokens - cached_1h
+        write_cost = (
+            Decimal(cached_5m) * rate_for_cache_write(rates, model_name)
+            + Decimal(cached_1h) * rate_for_cache_write_1h(rates, model_name)
+        )
+
     cost = (
-        Decimal(normal_prompt_tokens) * prompt_rate
-        + Decimal(completion_tokens) * completion_rate
-        + Decimal(cached_tokens) * cached_rate
+        Decimal(uncached_tokens) * rates.prompt
+        + Decimal(cache_read_tokens) * rates.cached
+        + Decimal(output_tokens) * rates.completion
+        + write_cost
     ) / Decimal("1000000")
     return cost.quantize(Decimal("0.000001"))
 

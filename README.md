@@ -542,7 +542,7 @@ python manage.py runserver 0.0.0.0:8002
 
 ### 15.4 模型价格
 
-价格存在 `dashboard.ModelPricing`，单位是“元 / 百万 token”，三档分别是输入、输出、缓存命中。改名后的渠道前缀（如 `deepseek/deepseek-v4.1-flash`）会回退到裸模型名查价。
+价格存在 `dashboard.ModelPricing`，单位是“元 / 百万 token”，共五档：输入、输出、缓存读、缓存写、长缓存写（Claude 1h / GPT 12h）。改名后的渠道前缀（如 `deepseek/deepseek-v4.1-flash`）会回退到裸模型名查价。
 
 一键按各家公开牌价覆盖价格表：
 
@@ -552,13 +552,36 @@ python manage.py runserver 0.0.0.0:8002
 ```
 
 - 智谱、月之暗面、DeepSeek 直接按人民币原价填写，不做换算；DeepSeek 取高峰时段价（V4.1 Flash 输入 2 元 / 输出 8 元 / 缓存命中 0.04 元）。
-- Anthropic、OpenAI、Google、xAI 按美元牌价 × 7.1 换算。缓存列取各家的缓存读取价，Anthropic 为输入价的 2.5%（Fable 5.2）或 5%（Opus / Sonnet 5.5）。
+- Anthropic、OpenAI、Google、xAI 按美元牌价 × 7.1 换算。缓存读价取各家的缓存命中价（Anthropic / OpenAI 为输入价的 10%，Gemini 约 5%）。
+- 缓存**写**价格单独一列，因为各家不一样：Anthropic 5 分钟 TTL 1.25 倍输入价、1 小时 TTL 2 倍；OpenAI 30 分钟 1.25 倍、12 小时 2.5 倍；Gemini 隐式缓存免费；DeepSeek / 智谱 / 月之暗面按输入原价。
+- Claude 的 1.25 倍 / 2 倍在代码里按模型名自动套用（`usage/services.py` 的 `rate_for_cache_write`），表里留 0 也不会算错。
 - `gemini-4-argon` / `gemini-4-carbon` 当前是限时促销价（$2 / $10），2026-12-01 起回到 $4 / $20，届时需要重跑一次命令。
 - 表里同时保留了 `gpt-6-astra`、`gemini-4-neon` 等仍在内核模型列表中的型号，新上架的模型改一行 `MARKET_PRICES` 即可。
 
+价格改了以后，历史行的 `estimated_cost` 仍是旧价。要按新价重算：
+
+```bash
+/srv/pioneer-portal/.venv/bin/python manage.py recalculate_usage_costs --dry-run          # 先看差多少
+/srv/pioneer-portal/.venv/bin/python manage.py recalculate_usage_costs                    # 全部重算
+/srv/pioneer-portal/.venv/bin/python manage.py recalculate_usage_costs --days 30          # 只重算最近 30 天
+```
+
+命令按 `raw_payload.token_breakdown` 逐行重算（分批 bulk_update，不会出现逐行查询把磁盘打满的情况），随后如果还要更新看板的预聚合，再跑 `rebuild_daily_stats --days 90`。
+
+计费口径（`usage/services.py` 的 `calculate_estimated_cost`）：
+
+| 概念 | 取数位置 |
+| --- | --- |
+| 未命中缓存的输入 | `token_breakdown.input.uncached_tokens` |
+| 缓存命中 | `token_breakdown.input.cache_read_tokens` |
+| 缓存写入 | `token_breakdown.input.cache_write_tokens`，按 `cache_details.by_ttl` 拆 5m / 1h |
+| 输出 | `token_breakdown.output.total_tokens` |
+
+不能用 `prompt_tokens - cached_tokens`：`cached_tokens` 这一列对 Anthropic 是“缓存读 + 缓存写”的混合值，而且 Claude 的 `prompt_tokens` 本身只算未命中部分，相减会把新输入全部算成 0。现在只对没有 `token_breakdown` 的老行才退回这个算法。
+
 ### 15.5 上线注意
 
-本版新增三个迁移（`users.0008`、`core.0006`、`quota.0002`）。发布脚本设置了 `ALLOW_AUTO_MIGRATE=0`，切换 tag 之后必须手工执行：
+本版新增一个迁移（`dashboard.0005`）。发布脚本设置了 `ALLOW_AUTO_MIGRATE=0`，切换 tag 之后必须手工执行：
 
 ```bash
 /srv/pioneer-portal/.venv/bin/python manage.py migrate

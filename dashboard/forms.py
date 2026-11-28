@@ -7,11 +7,20 @@ from usage.models import UsageLog
 class ModelPricingForm(forms.ModelForm):
     class Meta:
         model = ModelPricing
-        fields = ["model_name", "prompt_price_per_million", "completion_price_per_million", "cached_price_per_million"]
+        fields = [
+            "model_name",
+            "prompt_price_per_million",
+            "completion_price_per_million",
+            "cached_price_per_million",
+            "cache_write_price_per_million",
+            "cache_write_1h_price_per_million",
+        ]
         widgets = {
             "prompt_price_per_million": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001", "placeholder": "0.00"}),
             "completion_price_per_million": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001", "placeholder": "0.00"}),
             "cached_price_per_million": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001", "placeholder": "0.00"}),
+            "cache_write_price_per_million": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001", "placeholder": "留空算 0"}),
+            "cache_write_1h_price_per_million": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001", "placeholder": "留空算 0"}),
         }
 
     def __init__(self, *args, **kwargs):
