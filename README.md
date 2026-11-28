@@ -566,7 +566,7 @@ python manage.py runserver 0.0.0.0:8002
 /srv/pioneer-portal/.venv/bin/python manage.py recalculate_usage_costs --days 30          # 只重算最近 30 天
 ```
 
-命令按 `raw_payload.token_breakdown` 逐行重算（分批 bulk_update，不会出现逐行查询把磁盘打满的情况），随后如果还要更新看板的预聚合，再跑 `rebuild_daily_stats --days 90`。
+命令按 `raw_payload.token_breakdown` 逐行重算（分批 bulk_update，不会出现逐行查询把磁盘打满的情况），随后如果还要更新看板的预聚合，再跑 `rebuild_daily_stats --days 90`（它只取需要的几个小列，不读 `raw_payload`，可以放心重跑）。
 
 计费口径（`usage/services.py` 的 `calculate_estimated_cost`）：
 
