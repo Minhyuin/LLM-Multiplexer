@@ -335,9 +335,21 @@ class ApplyMarketPricesTests(TestCase):
 
         call_command("apply_market_prices")
         row = ModelPricing.objects.get(model_name="claude-opus-5-5")
-        self.assertEqual(row.prompt_price_per_million, Decimal("106.500000"))
-        self.assertEqual(row.completion_price_per_million, Decimal("532.500000"))
+        self.assertEqual(row.prompt_price_per_million, Decimal("28.400000"))
+        self.assertEqual(row.completion_price_per_million, Decimal("142.000000"))
+        self.assertEqual(row.cached_price_per_million, Decimal("1.420000"))
         self.assertEqual(ModelPricing.objects.filter(model_name="deepseek-v4.1-flash").count(), 1)
+
+    def test_vendors_that_quote_in_cny_are_not_converted(self):
+        from django.core.management import call_command
+
+        call_command("apply_market_prices")
+        glm = ModelPricing.objects.get(model_name="glm-5.3-flash")
+        self.assertEqual(glm.prompt_price_per_million, Decimal("0.800000"))
+        self.assertEqual(glm.completion_price_per_million, Decimal("2.800000"))
+        # A model the proxy serves but the old table never covered.
+        neon = ModelPricing.objects.get(model_name="gemini-4-neon")
+        self.assertEqual(neon.prompt_price_per_million, Decimal("21.300000"))
 
     def test_dry_run_writes_nothing(self):
         from django.core.management import call_command

@@ -544,12 +544,17 @@ python manage.py runserver 0.0.0.0:8002
 
 价格存在 `dashboard.ModelPricing`，单位是“元 / 百万 token”，三档分别是输入、输出、缓存命中。改名后的渠道前缀（如 `deepseek/deepseek-v4.1-flash`）会回退到裸模型名查价。
 
-一键改成市价（美元 × 7.1 汇率）：
+一键按各家公开牌价覆盖价格表：
 
 ```bash
 /srv/pioneer-portal/.venv/bin/python manage.py apply_market_prices --dry-run   # 先看
 /srv/pioneer-portal/.venv/bin/python manage.py apply_market_prices             # 再写
 ```
+
+- 智谱、月之暗面、DeepSeek 直接按人民币原价填写，不做换算；DeepSeek 取高峰时段价（V4.1 Flash 输入 2 元 / 输出 8 元 / 缓存命中 0.04 元）。
+- Anthropic、OpenAI、Google、xAI 按美元牌价 × 7.1 换算。缓存列取各家的缓存读取价，Anthropic 为输入价的 2.5%（Fable 5.2）或 5%（Opus / Sonnet 5.5）。
+- `gemini-4-argon` / `gemini-4-carbon` 当前是限时促销价（$2 / $10），2026-12-01 起回到 $4 / $20，届时需要重跑一次命令。
+- 表里同时保留了 `gpt-6-astra`、`gemini-4-neon` 等仍在内核模型列表中的型号，新上架的模型改一行 `MARKET_PRICES` 即可。
 
 ### 15.5 上线注意
 
